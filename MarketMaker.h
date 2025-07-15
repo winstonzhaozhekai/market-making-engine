@@ -1,29 +1,60 @@
-#ifndef MARKET_MAKER_H
-#define MARKET_MAKER_H
+#ifndef MARKETMAKER_H
+#define MARKETMAKER_H
 
-#include "MarketSimulator.h"
+#include "MarketDataEvent.h"
 #include <map>
 #include <vector>
-#include <string>
+#include <chrono>
 
-struct OrderBookLevel {
+struct Quote {
     double price;
     int size;
+    std::string order_id;
+    std::chrono::system_clock::time_point timestamp;
+};
+
+struct RiskLimits {
+    int max_position = 1000;
+    int max_daily_loss = 10000;
+    double max_quote_spread = 0.5;
+    int min_quote_size = 1;
+    int max_quote_size = 100;
 };
 
 class MarketMaker {
-public:
-    void on_market_data(const MarketDataEvent& md);
-    void report() const;
-    void process_trades(const std::vector<Trade>& trades); // Add process_trades method
-
 private:
-    void trade(const MarketDataEvent& md);
-
-    std::map<std::string, OrderBookLevel> order_book;
+    std::map<std::string, Quote> order_book;
     std::vector<MarketDataEvent> market_data_log;
+    double cash = 100000.0;
     int inventory = 0;
-    double cash = 0.0;
+    RiskLimits risk_limits;
+    double daily_pnl = 0.0;
+    std::chrono::system_clock::time_point last_quote_time;
+    int64_t last_processed_sequence = 0;
+    
+    // Order management
+    std::map<std::string, Quote> active_orders;
+    int order_counter = 0;
+    
+    // Performance tracking
+    double total_slippage = 0.0;
+    int missed_opportunities = 0;
+    
+public:
+    MarketMaker();
+    void on_market_data(const MarketDataEvent& md);
+    void report();
+    
+private:
+    bool check_risk_limits(const MarketDataEvent& md);
+    void process_trades(const std::vector<Trade>& trades);
+    void process_partial_fills(const std::vector<PartialFillEvent>& fills);
+    void update_quotes(const MarketDataEvent& md);
+    double calculate_slippage(double price, int size, const std::string& side);
+    int calculate_optimal_quote_size(const MarketDataEvent& md, const std::string& side);
+    double calculate_inventory_skew();
+    std::string generate_order_id();
+    bool is_stale_quote(const std::chrono::system_clock::time_point& quote_time);
 };
 
-#endif // MARKET_MAKER_H
+#endif

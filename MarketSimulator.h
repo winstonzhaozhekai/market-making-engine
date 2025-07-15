@@ -6,30 +6,7 @@
 #include <vector>
 #include <map>
 #include <chrono>
-#include "Order.h" // Include Order struct
-
-struct Trade {
-    double price;
-    int size;
-    std::string aggressor_side;
-    std::chrono::system_clock::time_point timestamp;
-
-    // Constructor to match usage in MarketSimulator
-    Trade(double price_, int size_, std::string aggressor_side_, std::chrono::system_clock::time_point timestamp_)
-        : price(price_), size(size_), aggressor_side(std::move(aggressor_side_)), timestamp(timestamp_) {}
-};
-
-struct MarketDataEvent {
-    std::string instrument;
-    double best_bid_price;
-    double best_ask_price;
-    int best_bid_size;
-    int best_ask_size;
-    std::vector<Order> bid_levels;
-    std::vector<Order> ask_levels;
-    std::chrono::system_clock::time_point timestamp;
-    std::vector<Trade> trades; // Add trades to market data
-};
+#include "MarketDataEvent.h" // Include the correct header file
 
 class MarketSimulator {
 public:
@@ -41,16 +18,16 @@ private:
     double mid_price;
     double spread;
     double volatility;
-    int latency_ms; // Add latency_ms member
-    std::map<std::string, std::vector<Order>> order_book; // L2 order book
+    int latency_ms;
+    std::map<std::string, std::vector<OrderLevel>> order_book; // Use OrderLevel from MarketDataEvent.h
     std::mt19937 rng;
+    int64_t sequence_number; // Declare sequence_number
 
     void initialize_order_book();
     void update_order_book();
-    void simulate_trade(); // Add simulate_trade method
-    std::string generate_order_id(); // Add generate_order_id method
-    std::chrono::system_clock::time_point current_time(); // Add current_time method
-    std::vector<Trade> trades; // Add trades member
+    void simulate_trade_activity(std::vector<Trade>& trades, std::vector<PartialFillEvent>& partial_fills);
+    std::string generate_order_id();
+    std::chrono::system_clock::time_point current_time();
 };
 
 #endif // MARKET_SIMULATOR_H
