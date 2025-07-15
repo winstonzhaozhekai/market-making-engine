@@ -1,18 +1,13 @@
 #ifndef MARKET_SIMULATOR_H
 #define MARKET_SIMULATOR_H
 
-#include <string>
 #include <random>
+#include <string>
+#include <vector>
+#include <map>
 #include <chrono>
-
-struct MarketDataEvent {
-    std::string instrument;
-    double bid;
-    double ask;
-    int bid_size;
-    int ask_size;
-    std::chrono::system_clock::time_point timestamp;
-};
+#include "Order.h" // Include Order struct
+#include "MarketDataEvent.h"
 
 class MarketSimulator {
 public:
@@ -24,7 +19,11 @@ private:
     double mid_price;
     double spread;
     double volatility;
+    std::map<std::string, std::vector<Order>> order_book; // L2 order book
     std::mt19937 rng;
+
+    void initialize_order_book();
+    void update_order_book();
 };
 
 #endif // MARKET_SIMULATOR_H
