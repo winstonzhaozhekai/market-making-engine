@@ -1,0 +1,29 @@
+# Ignore build files
+/build/
+*.o
+*.out
+*.a
+*.so
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
+
+# Ignore system files
+.DS_Store
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+
+# Ignore compiled binaries
+*.exe
+*.dll
+
+# Ignore coverage reports
+coverage/
+*.gcda
+*.gcno
+
+# Ignore generated files
+*.generated.*
