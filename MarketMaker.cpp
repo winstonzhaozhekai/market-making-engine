@@ -39,6 +39,9 @@ void MarketMaker::on_market_data(const MarketDataEvent& md) {
     order_book["ASK"] = {ask, 5};
     market_data_log.push_back(md);
     trade(md);
+
+    // Process trades from MarketSimulator
+    process_trades(md.trades); // Ensure MarketDataEvent includes trades
 }
 
 void MarketMaker::trade(const MarketDataEvent& md) {
@@ -69,8 +72,24 @@ void MarketMaker::trade(const MarketDataEvent& md) {
 }
 
 void MarketMaker::report() const {
-    double mark = market_data_log.back().bid + (market_data_log.back().ask - market_data_log.back().bid) / 2;
+    double mark = market_data_log.back().best_bid_price + 
+                  (market_data_log.back().best_ask_price - market_data_log.back().best_bid_price) / 2;
     double pnl = cash + inventory * mark;
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "Inventory: " << inventory << ", PnL: $" << pnl << std::endl;
+}
+
+void MarketMaker::process_trades(const std::vector<Trade>& trades) {
+    for (const auto& trade : trades) {
+        if (trade.aggressor_side == "BUY") {
+            inventory -= trade.size;
+            cash += trade.price * trade.size;
+        } else if (trade.aggressor_side == "SELL") {
+            inventory += trade.size;
+            cash -= trade.price * trade.size;
+        }
+        std::cout << "Processed trade: " << trade.aggressor_side 
+                  << " | Price: " << trade.price 
+                  << " | Size: " << trade.size << std::endl;
+    }
 }

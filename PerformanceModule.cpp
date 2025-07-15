@@ -2,6 +2,10 @@
 #include <iostream>
 
 void PerformanceModule::track_event(const MarketDataEvent& md) {
+    auto now = std::chrono::system_clock::now();
+    auto latency = std::chrono::duration_cast<std::chrono::milliseconds>(now - md.timestamp).count();
+    std::cout << "Event latency: " << latency << " ms" << std::endl;
+
     event_timestamps.push_back(md.timestamp);
     ++total_events;
 }

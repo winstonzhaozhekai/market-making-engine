@@ -10,7 +10,7 @@ using namespace std::chrono;
 
 int main() {
     // Initialize components
-    MarketSimulator simulator("XYZ", 100.0, 0.1, 0.5);
+    MarketSimulator simulator("XYZ", 100.0, 0.1, 0.5, 10);
     MarketMaker mm;
     PerformanceModule perf;
 
@@ -20,6 +20,14 @@ int main() {
         perf.track_event(md);                 // Track performance
         mm.on_market_data(md);                // Process market data
         mm.report();                          // Report inventory and PnL
+
+        // Optional: Log trades from MarketSimulator
+        for (const auto& trade : md.trades) {
+            std::cout << "Trade: " << trade.aggressor_side 
+                      << " | Price: " << trade.price 
+                      << " | Size: " << trade.size << std::endl;
+        }
+
         this_thread::sleep_for(milliseconds(10)); // Simulate time delay
     }
 

@@ -15,6 +15,7 @@ class MarketMaker {
 public:
     void on_market_data(const MarketDataEvent& md);
     void report() const;
+    void process_trades(const std::vector<Trade>& trades); // Add process_trades method
 
 private:
     void trade(const MarketDataEvent& md);
