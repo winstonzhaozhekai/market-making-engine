@@ -27,7 +27,7 @@ int main() {
     MarketMaker mm;
     PerformanceModule perf;
     
-    std::cout << "Starting HFT Market Making Engine..." << std::endl;
+    std::cout << "Starting Market Making Engine..." << std::endl;
     std::cout << "Press Ctrl+C to stop gracefully" << std::endl;
     
     int iteration = 0;

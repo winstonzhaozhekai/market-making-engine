@@ -1,8 +1,8 @@
-# HFT Market Making Engine
+# Market Making Engine
 
 ## Overview
 
-The **HFT Market Making Engine** is a high-frequency trading simulation platform designed to model market-making strategies, track performance metrics, and visualize trading activity. It includes the following components:
+The **Market Making Engine** is a high-frequency trading simulation platform designed to model market-making strategies, track performance metrics, and visualize trading activity. It includes the following components:
 
 1. **MarketSimulator**: Generates realistic market data events for simulation.
 2. **MarketMaker**: Implements market-making strategies and processes market data.
@@ -34,8 +34,8 @@ The **HFT Market Making Engine** is a high-frequency trading simulation platform
 ### Backend Setup
 1. Clone the repository:
    ```bash
-   git clone https://github.com/winstonzhaozhekai/hft-market-making-engine.git
-   cd hft-market-making-engine
+   git clone https://github.com/winstonzhaozhekai/market-making-engine.git
+   cd market-making-engine
    ```
 
 2. Install Boost libraries (if not already installed):
