@@ -5,6 +5,7 @@
 #include <map>
 #include <vector>
 #include <chrono>
+#include <string>
 
 struct Quote {
     double price;
@@ -44,7 +45,15 @@ public:
     MarketMaker();
     void on_market_data(const MarketDataEvent& md);
     void report();
-    
+    double get_cash() const;
+    int get_inventory() const;
+    double get_mark_price() const;
+    double get_unrealized_pnl() const;
+    double get_total_pnl() const;
+    double get_total_slippage() const;
+    int get_missed_opportunities() const;
+    double get_inventory_skew() const;
+
 private:
     bool check_risk_limits(const MarketDataEvent& md);
     void process_trades(const std::vector<Trade>& trades);

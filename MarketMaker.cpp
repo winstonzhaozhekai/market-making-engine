@@ -238,3 +238,39 @@ void MarketMaker::report() {
     std::cout << "Inventory Skew: " << calculate_inventory_skew() << std::endl;
     std::cout << "============================" << std::endl;
 }
+
+double MarketMaker::get_cash() const {
+    return cash;
+}
+
+int MarketMaker::get_inventory() const {
+    return inventory;
+}
+
+double MarketMaker::get_mark_price() const {
+    if (market_data_log.empty()) return 0.0;
+    return (market_data_log.back().best_bid_price + market_data_log.back().best_ask_price) / 2.0;
+}
+
+double MarketMaker::get_unrealized_pnl() const {
+    return get_inventory() * get_mark_price();
+}
+
+double MarketMaker::get_total_pnl() const {
+    return get_cash() + get_unrealized_pnl() - 100000.0; // Subtract initial cash
+}
+
+double MarketMaker::get_total_slippage() const {
+    return total_slippage;
+}
+
+int MarketMaker::get_missed_opportunities() const {
+    return missed_opportunities;
+}
+
+double MarketMaker::get_inventory_skew() const {
+    const double skew_factor = 0.001; // Adjust based on risk appetite
+    const double max_skew = 0.01;
+    double skew = -inventory * skew_factor;
+    return std::max(-max_skew, std::min(max_skew, skew));
+}
