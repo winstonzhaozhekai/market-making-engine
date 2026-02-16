@@ -3,6 +3,7 @@
 
 #include "MarketDataEvent.h"
 #include "Order.h"
+#include "include/Accounting.h"
 #include <map>
 #include <vector>
 #include <chrono>
@@ -27,17 +28,21 @@ public:
     int get_inventory() const;
     double get_mark_price() const;
     double get_unrealized_pnl() const;
+    double get_realized_pnl() const;
     double get_total_pnl() const;
     int get_total_fills() const;
     double get_inventory_skew() const;
+    double get_fees() const;
+    double get_rebates() const;
+    double get_avg_entry_price() const;
+    double get_gross_exposure() const;
+    double get_net_exposure() const;
 
 private:
     std::map<std::string, Order> active_orders;
     std::vector<MarketDataEvent> market_data_log;
-    double cash = 100000.0;
-    int inventory = 0;
+    Accounting accounting_{100000.0};
     RiskLimits risk_limits;
-    double daily_pnl = 0.0;
     std::chrono::system_clock::time_point last_quote_time;
     int64_t last_processed_sequence = 0;
     int order_counter = 0;

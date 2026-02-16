@@ -84,7 +84,7 @@ private:
         for (int iteration = 0; iteration < 1000; ++iteration) {
             auto md = simulator.generate_event();
             perf.track_event(md);
-            mm.on_market_data(md);
+            mm.on_market_data(md, simulator);
 
             std::ostringstream data_stream;
             data_stream << "{";
@@ -111,10 +111,14 @@ private:
                             << "\"inventory\": " << mm.get_inventory() << ","
                             << "\"cash\": " << mm.get_cash() << ","
                             << "\"mark_price\": " << mm.get_mark_price() << ","
+                            << "\"realized_pnl\": " << mm.get_realized_pnl() << ","
                             << "\"unrealized_pnl\": " << mm.get_unrealized_pnl() << ","
                             << "\"total_pnl\": " << mm.get_total_pnl() << ","
-                            << "\"total_slippage\": " << mm.get_total_slippage() << ","
-                            << "\"missed_opportunities\": " << mm.get_missed_opportunities() << ","
+                            << "\"fees\": " << mm.get_fees() << ","
+                            << "\"rebates\": " << mm.get_rebates() << ","
+                            << "\"avg_entry_price\": " << mm.get_avg_entry_price() << ","
+                            << "\"gross_exposure\": " << mm.get_gross_exposure() << ","
+                            << "\"net_exposure\": " << mm.get_net_exposure() << ","
                             << "\"inventory_skew\": " << mm.get_inventory_skew()
                             << "}";
             }

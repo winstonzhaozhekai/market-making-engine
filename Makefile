@@ -6,7 +6,7 @@ BOOST_LIB = -L/opt/homebrew/Cellar/boost/1.88.0/lib
 BOOST_LINK = -lboost_system -lboost_thread
 
 TARGETS = market_maker_simulator WebSocketServer
-TEST_TARGETS = tests/test_determinism tests/test_matching_engine
+TEST_TARGETS = tests/test_determinism tests/test_matching_engine tests/test_accounting
 
 all: $(TARGETS)
 
@@ -22,9 +22,13 @@ tests/test_determinism: tests/test_determinism.cpp MarketSimulator.cpp MatchingE
 tests/test_matching_engine: tests/test_matching_engine.cpp MatchingEngine.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ tests/test_matching_engine.cpp MatchingEngine.cpp
 
+tests/test_accounting: tests/test_accounting.cpp include/Accounting.h
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ tests/test_accounting.cpp
+
 test: $(TEST_TARGETS)
 	./tests/test_determinism
 	./tests/test_matching_engine
+	./tests/test_accounting
 
 clean:
 	rm -f $(TARGETS) $(TEST_TARGETS)

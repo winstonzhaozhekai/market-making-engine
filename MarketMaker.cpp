@@ -29,6 +29,10 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
         }
     }
 
+    // Mark-to-market on each market data event
+    double mid_price = (md.best_bid_price + md.best_ask_price) / 2.0;
+    accounting_.mark_to_market(mid_price);
+
     if (!check_risk_limits(md)) {
         return;
     }
@@ -41,17 +45,8 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
 void MarketMaker::on_fill(const FillEvent& fill) {
     ++total_fills;
 
-    if (fill.side == Side::BUY) {
-        // Our resting BUY was filled — we bought
-        inventory += fill.fill_qty;
-        cash -= fill.price * fill.fill_qty;
-    } else {
-        // Our resting SELL was filled — we sold
-        inventory -= fill.fill_qty;
-        cash += fill.price * fill.fill_qty;
-    }
-
-    daily_pnl = cash + inventory * fill.price - 100000.0;
+    // Delegate to accounting (MM resting orders are maker fills)
+    accounting_.on_fill(fill.side, fill.price, fill.fill_qty, /*is_maker=*/true);
 
     // Update or remove active order
     auto it = active_orders.find(fill.order_id);
@@ -67,14 +62,17 @@ void MarketMaker::on_fill(const FillEvent& fill) {
     std::cout << "FILL: " << (fill.side == Side::BUY ? "BUY" : "SELL")
               << " " << fill.fill_qty << " @ " << std::fixed << std::setprecision(4)
               << fill.price << " (leaves=" << fill.leaves_qty
-              << ") inv=" << inventory << " cash=" << std::setprecision(2) << cash << "\n";
+              << ") pos=" << accounting_.position()
+              << " cash=" << std::setprecision(2) << accounting_.cash()
+              << " realized=" << accounting_.realized_pnl()
+              << " unrealized=" << accounting_.unrealized_pnl() << "\n";
 }
 
 bool MarketMaker::check_risk_limits(const MarketDataEvent& md) {
-    if (std::abs(inventory) > risk_limits.max_position) {
+    if (std::abs(accounting_.position()) > risk_limits.max_position) {
         return false;
     }
-    if (daily_pnl < -risk_limits.max_daily_loss) {
+    if (accounting_.net_pnl() < -risk_limits.max_daily_loss) {
         return false;
     }
     if (md.best_ask_price - md.best_bid_price > risk_limits.max_quote_spread) {
@@ -133,7 +131,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
 double MarketMaker::calculate_inventory_skew() const {
     const double skew_factor = 0.001;
     const double max_skew = 0.01;
-    double skew = -inventory * skew_factor;
+    double skew = -accounting_.position() * skew_factor;
     return std::max(-max_skew, std::min(max_skew, skew));
 }
 
@@ -148,7 +146,7 @@ int MarketMaker::calculate_optimal_quote_size(const MarketDataEvent& md, Side si
         market_depth = md.ask_levels[0].size;
     }
 
-    double inventory_factor = 1.0 - std::abs(inventory) / static_cast<double>(risk_limits.max_position);
+    double inventory_factor = 1.0 - std::abs(accounting_.position()) / static_cast<double>(risk_limits.max_position);
     inventory_factor = std::max(0.1, inventory_factor);
 
     int scaled_size = static_cast<int>(base_size * (1.0 + market_depth * size_factor) * inventory_factor);
@@ -166,16 +164,22 @@ void MarketMaker::report() {
     }
 
     double mark = (market_data_log.back().best_bid_price + market_data_log.back().best_ask_price) / 2.0;
-    double unrealized_pnl = inventory * mark;
-    double total_pnl = cash + unrealized_pnl - 100000.0;
+    accounting_.mark_to_market(mark);
 
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "=== MARKET MAKER REPORT ===" << std::endl;
-    std::cout << "Inventory: " << inventory << " shares" << std::endl;
-    std::cout << "Cash: $" << cash << std::endl;
+    std::cout << "Position: " << accounting_.position() << " shares" << std::endl;
+    std::cout << "Cash: $" << accounting_.cash() << std::endl;
     std::cout << "Mark Price: $" << mark << std::endl;
-    std::cout << "Unrealized PnL: $" << unrealized_pnl << std::endl;
-    std::cout << "Total PnL: $" << total_pnl << std::endl;
+    std::cout << "Avg Entry Price: $" << accounting_.avg_entry_price() << std::endl;
+    std::cout << "Realized PnL: $" << accounting_.realized_pnl() << std::endl;
+    std::cout << "Unrealized PnL: $" << accounting_.unrealized_pnl() << std::endl;
+    std::cout << "Total PnL: $" << accounting_.total_pnl() << std::endl;
+    std::cout << "Fees: $" << accounting_.total_fees() << std::endl;
+    std::cout << "Rebates: $" << accounting_.total_rebates() << std::endl;
+    std::cout << "Net PnL: $" << accounting_.net_pnl() << std::endl;
+    std::cout << "Gross Exposure: $" << accounting_.gross_exposure(mark) << std::endl;
+    std::cout << "Net Exposure: $" << accounting_.net_exposure(mark) << std::endl;
     std::cout << "Total Fills: " << total_fills << std::endl;
     std::cout << "Active Orders: " << active_orders.size() << std::endl;
     std::cout << "Inventory Skew: " << calculate_inventory_skew() << std::endl;
@@ -183,11 +187,11 @@ void MarketMaker::report() {
 }
 
 double MarketMaker::get_cash() const {
-    return cash;
+    return accounting_.cash();
 }
 
 int MarketMaker::get_inventory() const {
-    return inventory;
+    return accounting_.position();
 }
 
 double MarketMaker::get_mark_price() const {
@@ -196,11 +200,15 @@ double MarketMaker::get_mark_price() const {
 }
 
 double MarketMaker::get_unrealized_pnl() const {
-    return get_inventory() * get_mark_price();
+    return accounting_.unrealized_pnl();
+}
+
+double MarketMaker::get_realized_pnl() const {
+    return accounting_.realized_pnl();
 }
 
 double MarketMaker::get_total_pnl() const {
-    return get_cash() + get_unrealized_pnl() - 100000.0;
+    return accounting_.net_pnl();
 }
 
 int MarketMaker::get_total_fills() const {
@@ -210,6 +218,26 @@ int MarketMaker::get_total_fills() const {
 double MarketMaker::get_inventory_skew() const {
     const double skew_factor = 0.001;
     const double max_skew = 0.01;
-    double skew = -inventory * skew_factor;
+    double skew = -accounting_.position() * skew_factor;
     return std::max(-max_skew, std::min(max_skew, skew));
+}
+
+double MarketMaker::get_fees() const {
+    return accounting_.total_fees();
+}
+
+double MarketMaker::get_rebates() const {
+    return accounting_.total_rebates();
+}
+
+double MarketMaker::get_avg_entry_price() const {
+    return accounting_.avg_entry_price();
+}
+
+double MarketMaker::get_gross_exposure() const {
+    return accounting_.gross_exposure(get_mark_price());
+}
+
+double MarketMaker::get_net_exposure() const {
+    return accounting_.net_exposure(get_mark_price());
 }
