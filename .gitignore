@@ -19,6 +19,13 @@
 # Ignore compiled binaries
 *.exe
 *.dll
+/market_maker_simulator
+/WebSocketServer
+/tests/test_determinism
+/tests/test_matching_engine
+
+# Ignore docs
+/docs/
 
 # Ignore coverage reports
 coverage/

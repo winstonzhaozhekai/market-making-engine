@@ -2,17 +2,13 @@
 #define MARKETMAKER_H
 
 #include "MarketDataEvent.h"
+#include "Order.h"
 #include <map>
 #include <vector>
 #include <chrono>
 #include <string>
 
-struct Quote {
-    double price;
-    int size;
-    std::string order_id;
-    std::chrono::system_clock::time_point timestamp;
-};
+class MarketSimulator;
 
 struct RiskLimits {
     int max_position = 1000;
@@ -23,8 +19,20 @@ struct RiskLimits {
 };
 
 class MarketMaker {
+public:
+    MarketMaker();
+    void on_market_data(const MarketDataEvent& md, MarketSimulator& simulator);
+    void report();
+    double get_cash() const;
+    int get_inventory() const;
+    double get_mark_price() const;
+    double get_unrealized_pnl() const;
+    double get_total_pnl() const;
+    int get_total_fills() const;
+    double get_inventory_skew() const;
+
 private:
-    std::map<std::string, Quote> order_book;
+    std::map<std::string, Order> active_orders;
     std::vector<MarketDataEvent> market_data_log;
     double cash = 100000.0;
     int inventory = 0;
@@ -32,38 +40,16 @@ private:
     double daily_pnl = 0.0;
     std::chrono::system_clock::time_point last_quote_time;
     int64_t last_processed_sequence = 0;
-    
-    // Order management
-    std::map<std::string, Quote> active_orders;
     int order_counter = 0;
-    
-    // Performance tracking
-    double total_slippage = 0.0;
-    int missed_opportunities = 0;
-    
-public:
-    MarketMaker();
-    void on_market_data(const MarketDataEvent& md);
-    void report();
-    double get_cash() const;
-    int get_inventory() const;
-    double get_mark_price() const;
-    double get_unrealized_pnl() const;
-    double get_total_pnl() const;
-    double get_total_slippage() const;
-    int get_missed_opportunities() const;
-    double get_inventory_skew() const;
+    int total_fills = 0;
 
-private:
     bool check_risk_limits(const MarketDataEvent& md);
-    void process_trades(const std::vector<Trade>& trades);
-    void process_partial_fills(const std::vector<PartialFillEvent>& fills);
-    void update_quotes(const MarketDataEvent& md);
-    double calculate_slippage(double price, int size, const std::string& side);
-    int calculate_optimal_quote_size(const MarketDataEvent& md, const std::string& side);
-    double calculate_inventory_skew();
+    void on_fill(const FillEvent& fill);
+    void update_quotes(const MarketDataEvent& md, MarketSimulator& simulator);
+    void cancel_all_orders(MarketSimulator& simulator);
+    int calculate_optimal_quote_size(const MarketDataEvent& md, Side side);
+    double calculate_inventory_skew() const;
     std::string generate_order_id();
-    bool is_stale_quote(const std::chrono::system_clock::time_point& quote_time);
 };
 
 #endif

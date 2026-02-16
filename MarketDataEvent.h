@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <chrono>
+#include "Order.h"
 
 struct OrderLevel {
     double price;
@@ -42,6 +43,7 @@ struct MarketDataEvent {
     std::vector<OrderLevel> ask_levels;
     std::vector<Trade> trades;
     std::vector<PartialFillEvent> partial_fills;
+    std::vector<FillEvent> mm_fills;
     std::chrono::system_clock::time_point timestamp;
     int64_t sequence_number;
 };
