@@ -10,6 +10,8 @@
 #include "MarketSimulator.h"
 #include "MarketMaker.h"
 #include "include/SimulationConfig.h"
+#include "include/HeuristicStrategy.h"
+#include "strategies/AvellanedaStoikovStrategy.h"
 
 using namespace std;
 
@@ -45,6 +47,7 @@ void print_usage() {
     std::cout << "Usage: ./market_maker_simulator [options]\n"
               << "Options:\n"
               << "  --mode <name>       simulate|replay (default: simulate)\n"
+              << "  --strategy <name>   heuristic|avellaneda-stoikov (default: heuristic)\n"
               << "  --seed <n>          RNG seed (default: 42)\n"
               << "  --iterations <n>    Number of events to process (default: 1000)\n"
               << "  --latency-ms <n>    Per-event latency in ms (default: 10)\n"
@@ -62,13 +65,23 @@ bool read_arg_value(int argc, char* argv[], int& i, std::string& out) {
     return true;
 }
 
+std::string strategy_name = "heuristic";
+
 SimulationConfig parse_args(int argc, char* argv[]) {
     SimulationConfig config;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         std::string value;
 
-        if (arg == "--seed") {
+        if (arg == "--strategy") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--strategy requires a value");
+            }
+            if (value != "heuristic" && value != "avellaneda-stoikov") {
+                throw std::invalid_argument("Invalid --strategy value: " + value + " (expected heuristic|avellaneda-stoikov)");
+            }
+            strategy_name = value;
+        } else if (arg == "--seed") {
             if (!read_arg_value(argc, argv, i, value)) {
                 throw std::invalid_argument("--seed requires a value");
             }
@@ -157,7 +170,15 @@ int main(int argc, char* argv[]) {
 
     try {
         MarketSimulator simulator(config);
-        MarketMaker mm;
+
+        std::unique_ptr<Strategy> strategy;
+        if (strategy_name == "avellaneda-stoikov") {
+            strategy = std::make_unique<AvellanedaStoikovStrategy>();
+        } else {
+            strategy = std::make_unique<HeuristicStrategy>();
+        }
+        RiskConfig risk_cfg;
+        MarketMaker mm(risk_cfg, std::move(strategy));
         int processed = 0;
         int64_t last_sequence = 0;
         double sum_bid = 0.0;

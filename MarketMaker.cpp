@@ -1,16 +1,23 @@
 #include "MarketMaker.h"
 #include "MarketSimulator.h"
+#include "include/HeuristicStrategy.h"
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
 #include <cmath>
 
-MarketMaker::MarketMaker() {
+MarketMaker::MarketMaker()
+    : strategy_(std::make_unique<HeuristicStrategy>()) {
     last_quote_time = std::chrono::system_clock::now();
 }
 
 MarketMaker::MarketMaker(const RiskConfig& cfg)
-    : risk_manager_(cfg) {
+    : risk_manager_(cfg), strategy_(std::make_unique<HeuristicStrategy>()) {
+    last_quote_time = std::chrono::system_clock::now();
+}
+
+MarketMaker::MarketMaker(const RiskConfig& cfg, std::unique_ptr<Strategy> strategy)
+    : risk_manager_(cfg), strategy_(std::move(strategy)) {
     last_quote_time = std::chrono::system_clock::now();
 }
 
@@ -84,8 +91,6 @@ void MarketMaker::cancel_all_orders(MarketSimulator& simulator) {
 }
 
 void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simulator) {
-    const double base_spread = 0.02;
-
     // Cancel stale orders before placing new ones
     cancel_all_orders(simulator);
 
@@ -93,21 +98,33 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     double best_ask = md.ask_levels[0].price;
     double mid_price = (best_bid + best_ask) / 2.0;
 
-    double inv_skew = calculate_inventory_skew();
+    // Build snapshot for strategy
+    StrategySnapshot snap;
+    snap.best_bid = best_bid;
+    snap.best_ask = best_ask;
+    snap.mid_price = mid_price;
+    snap.bid_levels = md.bid_levels;
+    snap.ask_levels = md.ask_levels;
+    snap.trades = md.trades;
+    snap.position = accounting_.position();
+    snap.max_position = risk_manager_.config().max_net_position;
+    snap.timestamp = md.timestamp;
+    snap.sequence_number = md.sequence_number;
 
-    double bid_price = mid_price - base_spread / 2.0 + inv_skew;
-    double ask_price = mid_price + base_spread / 2.0 + inv_skew;
+    QuoteDecision decision = strategy_->compute_quotes(snap);
 
-    int bid_size = calculate_optimal_quote_size(md, Side::BUY);
-    int ask_size = calculate_optimal_quote_size(md, Side::SELL);
+    if (!decision.should_quote) {
+        return;
+    }
 
+    // Apply risk clamps on sizes
     const auto& cfg = risk_manager_.config();
-    bid_size = std::max(cfg.min_quote_size, std::min(bid_size, cfg.max_quote_size));
-    ask_size = std::max(cfg.min_quote_size, std::min(ask_size, cfg.max_quote_size));
+    int bid_size = std::max(cfg.min_quote_size, std::min(decision.bid_size, cfg.max_quote_size));
+    int ask_size = std::max(cfg.min_quote_size, std::min(decision.ask_size, cfg.max_quote_size));
 
     // Submit bid
     std::string bid_id = generate_order_id();
-    Order bid_order(bid_id, Side::BUY, bid_price, bid_size, md.timestamp);
+    Order bid_order(bid_id, Side::BUY, decision.bid_price, bid_size, md.timestamp);
     if (simulator.submit_order(bid_order) == OrderStatus::ACKNOWLEDGED) {
         bid_order.status = OrderStatus::ACKNOWLEDGED;
         active_orders.emplace(bid_id, bid_order);
@@ -116,7 +133,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
 
     // Submit ask
     std::string ask_id = generate_order_id();
-    Order ask_order(ask_id, Side::SELL, ask_price, ask_size, md.timestamp);
+    Order ask_order(ask_id, Side::SELL, decision.ask_price, ask_size, md.timestamp);
     if (simulator.submit_order(ask_order) == OrderStatus::ACKNOWLEDGED) {
         ask_order.status = OrderStatus::ACKNOWLEDGED;
         active_orders.emplace(ask_id, ask_order);
@@ -124,31 +141,6 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     }
 
     last_quote_time = md.timestamp;
-}
-
-double MarketMaker::calculate_inventory_skew() const {
-    const double skew_factor = 0.001;
-    const double max_skew = 0.01;
-    double skew = -accounting_.position() * skew_factor;
-    return std::max(-max_skew, std::min(max_skew, skew));
-}
-
-int MarketMaker::calculate_optimal_quote_size(const MarketDataEvent& md, Side side) {
-    const int base_size = 5;
-    const double size_factor = 0.1;
-
-    int market_depth = 0;
-    if (side == Side::BUY && !md.bid_levels.empty()) {
-        market_depth = md.bid_levels[0].size;
-    } else if (side == Side::SELL && !md.ask_levels.empty()) {
-        market_depth = md.ask_levels[0].size;
-    }
-
-    double inventory_factor = 1.0 - std::abs(accounting_.position()) / static_cast<double>(risk_manager_.config().max_net_position);
-    inventory_factor = std::max(0.1, inventory_factor);
-
-    int scaled_size = static_cast<int>(base_size * (1.0 + market_depth * size_factor) * inventory_factor);
-    return std::max(1, std::min(scaled_size, risk_manager_.config().max_quote_size));
 }
 
 std::string MarketMaker::generate_order_id() {
@@ -174,6 +166,12 @@ void MarketMaker::report() {
     double mark = (market_data_log.back().best_bid_price + market_data_log.back().best_ask_price) / 2.0;
     accounting_.mark_to_market(mark);
 
+    // Inline skew formula (same as get_inventory_skew)
+    const double skew_factor = 0.001;
+    const double max_skew = 0.01;
+    double skew = -accounting_.position() * skew_factor;
+    skew = std::max(-max_skew, std::min(max_skew, skew));
+
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "=== MARKET MAKER REPORT ===" << std::endl;
     std::cout << "Position: " << accounting_.position() << " shares" << std::endl;
@@ -193,7 +191,8 @@ void MarketMaker::report() {
     std::cout << "High Water Mark: $" << risk_manager_.high_water_mark() << std::endl;
     std::cout << "Total Fills: " << total_fills << std::endl;
     std::cout << "Active Orders: " << active_orders.size() << std::endl;
-    std::cout << "Inventory Skew: " << calculate_inventory_skew() << std::endl;
+    std::cout << "Strategy: " << strategy_->name() << std::endl;
+    std::cout << "Inventory Skew: " << skew << std::endl;
     std::cout << "============================" << std::endl;
 }
 

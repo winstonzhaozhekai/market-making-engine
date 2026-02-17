@@ -5,10 +5,12 @@
 #include "Order.h"
 #include "include/Accounting.h"
 #include "include/RiskManager.h"
+#include "include/Strategy.h"
 #include <map>
 #include <vector>
 #include <chrono>
 #include <string>
+#include <memory>
 
 class MarketSimulator;
 
@@ -16,6 +18,7 @@ class MarketMaker {
 public:
     MarketMaker();
     explicit MarketMaker(const RiskConfig& cfg);
+    MarketMaker(const RiskConfig& cfg, std::unique_ptr<Strategy> strategy);
     void on_market_data(const MarketDataEvent& md, MarketSimulator& simulator);
     void report();
     double get_cash() const;
@@ -39,6 +42,7 @@ private:
     std::vector<MarketDataEvent> market_data_log;
     Accounting accounting_{100000.0};
     RiskManager risk_manager_;
+    std::unique_ptr<Strategy> strategy_;
     std::chrono::system_clock::time_point last_quote_time;
     int64_t last_processed_sequence = 0;
     int order_counter = 0;
@@ -47,8 +51,6 @@ private:
     void on_fill(const FillEvent& fill);
     void update_quotes(const MarketDataEvent& md, MarketSimulator& simulator);
     void cancel_all_orders(MarketSimulator& simulator);
-    int calculate_optimal_quote_size(const MarketDataEvent& md, Side side);
-    double calculate_inventory_skew() const;
     std::string generate_order_id();
 };
 
