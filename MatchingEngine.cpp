@@ -38,7 +38,7 @@ void MatchingEngine::insert_ask(Order order) {
     ask_book.insert(it, std::move(order));
 }
 
-bool MatchingEngine::cancel_order(const std::string& order_id) {
+bool MatchingEngine::cancel_order(uint64_t order_id) {
     for (auto it = bid_book.begin(); it != bid_book.end(); ++it) {
         if (it->order_id == order_id) {
             it->status = OrderStatus::CANCELED;
@@ -58,7 +58,7 @@ bool MatchingEngine::cancel_order(const std::string& order_id) {
 
 std::vector<FillEvent> MatchingEngine::match_incoming_order(
     Side aggressor_side, double price, int qty,
-    const std::string& trade_id,
+    uint64_t trade_id,
     std::chrono::system_clock::time_point timestamp)
 {
     std::vector<FillEvent> fills;

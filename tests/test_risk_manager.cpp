@@ -29,8 +29,8 @@ MarketDataEvent make_md(double bid, double ask, time_point ts, int64_t seq = 1) 
     md.best_ask_price = ask;
     md.best_bid_size = 100;
     md.best_ask_size = 100;
-    md.bid_levels.emplace_back(bid, 100, "B1", ts);
-    md.ask_levels.emplace_back(ask, 100, "A1", ts);
+    md.bid_levels.emplace_back(bid, 100, 1ULL, ts);
+    md.ask_levels.emplace_back(ask, 100, 2ULL, ts);
     md.timestamp = ts;
     md.sequence_number = seq;
     return md;
@@ -224,7 +224,7 @@ void test_max_quote_spread_breached() {
 // State machine tests (5)
 // ============================================================
 
-// 12. normal → warning transition
+// 12. normal -> warning transition
 void test_state_normal_to_warning() {
     RiskConfig cfg;
     cfg.max_net_position = 100;
@@ -241,7 +241,7 @@ void test_state_normal_to_warning() {
     std::cout << "PASS: test_state_normal_to_warning\n";
 }
 
-// 13. normal → breached transition
+// 13. normal -> breached transition
 void test_state_normal_to_breached() {
     RiskConfig cfg;
     cfg.max_net_position = 100;
@@ -343,7 +343,7 @@ void test_kill_switch_evaluate_cannot_exit() {
     std::cout << "PASS: test_kill_switch_evaluate_cannot_exit\n";
 }
 
-// 19. reset when safe → Normal
+// 19. reset when safe -> Normal
 void test_kill_switch_reset_safe() {
     RiskConfig cfg;
     RiskManager rm(cfg);
@@ -358,7 +358,7 @@ void test_kill_switch_reset_safe() {
     std::cout << "PASS: test_kill_switch_reset_safe\n";
 }
 
-// 20. reset when unsafe → Breached
+// 20. reset when unsafe -> Breached
 void test_kill_switch_reset_unsafe() {
     RiskConfig cfg;
     cfg.max_net_position = 100;

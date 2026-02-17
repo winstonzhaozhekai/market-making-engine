@@ -12,6 +12,7 @@
 #include "include/SimulationConfig.h"
 #include "include/HeuristicStrategy.h"
 #include "strategies/AvellanedaStoikovStrategy.h"
+#include "include/BinaryLogger.h"
 
 using namespace std;
 
@@ -53,6 +54,7 @@ void print_usage() {
               << "  --latency-ms <n>    Per-event latency in ms (default: 10)\n"
               << "  --event-log <path>  Write generated events to log file\n"
               << "  --replay <path>     Compatibility alias for --mode replay + replay path\n"
+              << "  --binary-log <path> Write events in compact binary format\n"
               << "  --quiet             Suppress per-event output\n"
               << "  --help              Show this help text\n";
 }
@@ -66,6 +68,7 @@ bool read_arg_value(int argc, char* argv[], int& i, std::string& out) {
 }
 
 std::string strategy_name = "heuristic";
+std::string binary_log_path;
 
 SimulationConfig parse_args(int argc, char* argv[]) {
     SimulationConfig config;
@@ -112,6 +115,11 @@ SimulationConfig parse_args(int argc, char* argv[]) {
             }
             config.replay_log_path = value;
             config.mode = SimulationMode::Replay;
+        } else if (arg == "--binary-log") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--binary-log requires a value");
+            }
+            binary_log_path = value;
         } else if (arg == "--quiet") {
             config.quiet = true;
         } else if (arg == "--help") {
@@ -179,6 +187,17 @@ int main(int argc, char* argv[]) {
         }
         RiskConfig risk_cfg;
         MarketMaker mm(risk_cfg, std::move(strategy));
+
+        // Optional binary logger
+        std::unique_ptr<BinaryLogger> bin_logger;
+        if (!binary_log_path.empty()) {
+            bin_logger = std::make_unique<BinaryLogger>(binary_log_path);
+            if (!bin_logger->is_open()) {
+                std::cerr << "Failed to open binary log: " << binary_log_path << "\n";
+                return 1;
+            }
+        }
+
         int processed = 0;
         int64_t last_sequence = 0;
         double sum_bid = 0.0;
@@ -198,6 +217,11 @@ int main(int argc, char* argv[]) {
             // MM reads market data, submits/cancels orders via simulator
             mm.on_market_data(md, simulator);
 
+            // Binary log if enabled
+            if (bin_logger) {
+                bin_logger->log_event(md);
+            }
+
             ++processed;
             last_sequence = md.sequence_number;
             sum_bid += md.best_bid_price;
@@ -213,7 +237,8 @@ int main(int argc, char* argv[]) {
 
             for (const auto& trade : md.trades) {
                 total_trade_volume += trade.size;
-                event_fp << "|T:" << trade.aggressor_side << ":" << std::fixed << std::setprecision(6)
+                event_fp << "|T:" << (trade.aggressor_side == Side::BUY ? "BUY" : "SELL")
+                         << ":" << std::fixed << std::setprecision(6)
                          << trade.price << ":" << trade.size;
             }
             for (const auto& fill : md.partial_fills) {

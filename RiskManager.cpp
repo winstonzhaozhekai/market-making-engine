@@ -3,7 +3,9 @@
 #include <algorithm>
 
 RiskManager::RiskManager(const RiskConfig& cfg)
-    : config_(cfg) {}
+    : config_(cfg) {
+    last_results_.reserve(7);
+}
 
 RiskState RiskManager::classify(double ratio) const {
     if (ratio >= 1.0) return RiskState::Breached;
@@ -16,8 +18,7 @@ RiskRuleResult RiskManager::eval_max_net_position(const Accounting& acct) {
     double limit = static_cast<double>(config_.max_net_position);
     double ratio = current / limit;
     RiskState level = classify(ratio);
-    return {RiskRuleId::MaxNetPosition, level, current, limit,
-            "net_position=" + std::to_string(acct.position())};
+    return {RiskRuleId::MaxNetPosition, level, current, limit, "net_position"};
 }
 
 RiskRuleResult RiskManager::eval_max_notional_exposure(const Accounting& acct, double mark_price) {
@@ -25,8 +26,7 @@ RiskRuleResult RiskManager::eval_max_notional_exposure(const Accounting& acct, d
     double limit = config_.max_notional_exposure;
     double ratio = current / limit;
     RiskState level = classify(ratio);
-    return {RiskRuleId::MaxNotionalExposure, level, current, limit,
-            "gross_exposure=" + std::to_string(current)};
+    return {RiskRuleId::MaxNotionalExposure, level, current, limit, "gross_exposure"};
 }
 
 RiskRuleResult RiskManager::eval_max_drawdown(const Accounting& acct) {
@@ -43,8 +43,7 @@ RiskRuleResult RiskManager::eval_max_drawdown(const Accounting& acct) {
     double limit = config_.max_drawdown;
     double ratio = drawdown_ / limit;
     RiskState level = classify(ratio);
-    return {RiskRuleId::MaxDrawdown, level, drawdown_, limit,
-            "drawdown=" + std::to_string(drawdown_) + " hwm=" + std::to_string(high_water_mark_)};
+    return {RiskRuleId::MaxDrawdown, level, drawdown_, limit, "drawdown"};
 }
 
 RiskRuleResult RiskManager::eval_max_quote_rate(std::chrono::system_clock::time_point now) {
@@ -59,8 +58,7 @@ RiskRuleResult RiskManager::eval_max_quote_rate(std::chrono::system_clock::time_
     double limit = config_.max_quotes_per_second;
     double ratio = current / limit;
     RiskState level = classify(ratio);
-    return {RiskRuleId::MaxQuoteRate, level, current, limit,
-            "quote_rate=" + std::to_string(current) + "/s"};
+    return {RiskRuleId::MaxQuoteRate, level, current, limit, "quote_rate"};
 }
 
 RiskRuleResult RiskManager::eval_max_cancel_rate(std::chrono::system_clock::time_point now) {
@@ -75,16 +73,14 @@ RiskRuleResult RiskManager::eval_max_cancel_rate(std::chrono::system_clock::time
     double limit = config_.max_cancels_per_second;
     double ratio = current / limit;
     RiskState level = classify(ratio);
-    return {RiskRuleId::MaxCancelRate, level, current, limit,
-            "cancel_rate=" + std::to_string(current) + "/s"};
+    return {RiskRuleId::MaxCancelRate, level, current, limit, "cancel_rate"};
 }
 
 RiskRuleResult RiskManager::eval_stale_market_data(std::chrono::system_clock::time_point md_ts) {
     if (!last_md_timestamp_set_) {
         last_md_timestamp_ = md_ts;
         last_md_timestamp_set_ = true;
-        return {RiskRuleId::StaleMarketData, RiskState::Normal, 0.0, config_.max_stale_data_ms,
-                "first_tick"};
+        return {RiskRuleId::StaleMarketData, RiskState::Normal, 0.0, config_.max_stale_data_ms, "first_tick"};
     }
 
     auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(md_ts - last_md_timestamp_);
@@ -94,8 +90,7 @@ RiskRuleResult RiskManager::eval_stale_market_data(std::chrono::system_clock::ti
     double limit = config_.max_stale_data_ms;
     double ratio = current_ms / limit;
     RiskState level = classify(ratio);
-    return {RiskRuleId::StaleMarketData, level, current_ms, limit,
-            "stale_ms=" + std::to_string(current_ms)};
+    return {RiskRuleId::StaleMarketData, level, current_ms, limit, "stale_ms"};
 }
 
 RiskRuleResult RiskManager::eval_max_quote_spread(const MarketDataEvent& md) {
@@ -103,8 +98,7 @@ RiskRuleResult RiskManager::eval_max_quote_spread(const MarketDataEvent& md) {
     double limit = config_.max_quote_spread;
     double ratio = spread / limit;
     RiskState level = classify(ratio);
-    return {RiskRuleId::MaxQuoteSpread, level, spread, limit,
-            "spread=" + std::to_string(spread)};
+    return {RiskRuleId::MaxQuoteSpread, level, spread, limit, "spread"};
 }
 
 RiskState RiskManager::evaluate(const Accounting& acct, const MarketDataEvent& md, double mark_price) {

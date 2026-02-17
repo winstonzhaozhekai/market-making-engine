@@ -54,7 +54,7 @@ public:
 
     void on_trades(const std::vector<Trade>& trades) {
         for (const auto& t : trades) {
-            double signed_vol = (t.aggressor_side == "BUY") ?
+            double signed_vol = (t.aggressor_side == Side::BUY) ?
                 static_cast<double>(t.size) : -static_cast<double>(t.size);
             signed_volumes_.push_back(signed_vol);
             if (signed_volumes_.size() > window_) {

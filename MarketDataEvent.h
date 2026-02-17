@@ -2,31 +2,31 @@
 #define MARKETDATAEVENT_H
 
 #include <vector>
-#include <string>
+#include <cstdint>
 #include <chrono>
 #include "Order.h"
 
 struct OrderLevel {
     double price;
     int size;
-    std::string order_id;
+    uint64_t order_id;
     std::chrono::system_clock::time_point timestamp;
 
     // Constructor
-    OrderLevel(double p, int s, const std::string& id, std::chrono::system_clock::time_point ts)
+    OrderLevel(double p, int s, uint64_t id, std::chrono::system_clock::time_point ts)
         : price(p), size(s), order_id(id), timestamp(ts) {}
 };
 
 struct Trade {
-    std::string aggressor_side;
+    Side aggressor_side;
     double price;
     int size;
-    std::string trade_id;
+    uint64_t trade_id;
     std::chrono::system_clock::time_point timestamp;
 };
 
 struct PartialFillEvent {
-    std::string order_id;
+    uint64_t order_id;
     double price;
     int filled_size;
     int remaining_size;

@@ -53,7 +53,10 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
 
     update_quotes(md, simulator);
 
-    market_data_log.push_back(md);
+    // Store last prices for report/mark-price (replaces unbounded market_data_log)
+    last_bid_price_ = md.best_bid_price;
+    last_ask_price_ = md.best_ask_price;
+    has_last_event_ = true;
 }
 
 void MarketMaker::on_fill(const FillEvent& fill) {
@@ -123,7 +126,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     int ask_size = std::max(cfg.min_quote_size, std::min(decision.ask_size, cfg.max_quote_size));
 
     // Submit bid
-    std::string bid_id = generate_order_id();
+    uint64_t bid_id = generate_order_id();
     Order bid_order(bid_id, Side::BUY, decision.bid_price, bid_size, md.timestamp);
     if (simulator.submit_order(bid_order) == OrderStatus::ACKNOWLEDGED) {
         bid_order.status = OrderStatus::ACKNOWLEDGED;
@@ -132,7 +135,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     }
 
     // Submit ask
-    std::string ask_id = generate_order_id();
+    uint64_t ask_id = generate_order_id();
     Order ask_order(ask_id, Side::SELL, decision.ask_price, ask_size, md.timestamp);
     if (simulator.submit_order(ask_order) == OrderStatus::ACKNOWLEDGED) {
         ask_order.status = OrderStatus::ACKNOWLEDGED;
@@ -143,8 +146,9 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     last_quote_time = md.timestamp;
 }
 
-std::string MarketMaker::generate_order_id() {
-    return "MM_" + std::to_string(++order_counter);
+uint64_t MarketMaker::generate_order_id() {
+    constexpr uint64_t kMmOrderTag = 1ULL << 48;
+    return kMmOrderTag | static_cast<uint64_t>(++order_counter);
 }
 
 static const char* risk_state_str(RiskState s) {
@@ -158,12 +162,12 @@ static const char* risk_state_str(RiskState s) {
 }
 
 void MarketMaker::report() {
-    if (market_data_log.empty()) {
+    if (!has_last_event_) {
         std::cout << "No market data events logged. Report cannot be generated." << std::endl;
         return;
     }
 
-    double mark = (market_data_log.back().best_bid_price + market_data_log.back().best_ask_price) / 2.0;
+    double mark = (last_bid_price_ + last_ask_price_) / 2.0;
     accounting_.mark_to_market(mark);
 
     // Inline skew formula (same as get_inventory_skew)
@@ -205,8 +209,8 @@ int MarketMaker::get_inventory() const {
 }
 
 double MarketMaker::get_mark_price() const {
-    if (market_data_log.empty()) return 0.0;
-    return (market_data_log.back().best_bid_price + market_data_log.back().best_ask_price) / 2.0;
+    if (!has_last_event_) return 0.0;
+    return (last_bid_price_ + last_ask_price_) / 2.0;
 }
 
 double MarketMaker::get_unrealized_pnl() const {

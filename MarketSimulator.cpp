@@ -13,6 +13,10 @@
 namespace {
 constexpr int64_t kBaseTimestampMs = 1700000000000LL;
 
+// Packed ID tags
+constexpr uint64_t kSimOrderTag  = 2ULL << 48;
+constexpr uint64_t kTradeIdTag   = 3ULL << 48;
+
 std::vector<std::string> split(const std::string& input, char delimiter) {
     std::vector<std::string> out;
     std::size_t start = 0;
@@ -32,6 +36,14 @@ int64_t to_millis(const std::chrono::system_clock::time_point& ts) {
 
 std::chrono::system_clock::time_point from_millis(int64_t ms) {
     return std::chrono::system_clock::time_point(std::chrono::milliseconds(ms));
+}
+
+const char* side_to_str(Side s) {
+    return s == Side::BUY ? "BUY" : "SELL";
+}
+
+Side str_to_side(const std::string& s) {
+    return s == "BUY" ? Side::BUY : Side::SELL;
 }
 } // namespace
 
@@ -60,6 +72,10 @@ MarketSimulator::MarketSimulator(const SimulationConfig& cfg)
       sequence_number(0),
       simulation_clock(from_millis(kBaseTimestampMs + static_cast<int64_t>(cfg.seed) * 1000)),
       replay_index(0) {
+
+    trades_buf_.reserve(4);
+    mm_fills_buf_.reserve(8);
+
     if (config.mode == SimulationMode::Replay) {
         if (config.replay_log_path.empty()) {
             throw std::runtime_error("Replay mode requires a replay log path");
@@ -85,10 +101,12 @@ MarketSimulator::MarketSimulator(const SimulationConfig& cfg)
 
 void MarketSimulator::initialize_order_book() {
     std::uniform_int_distribution<int> size_dist(1, 10);
+    bid_levels_.reserve(5);
+    ask_levels_.reserve(5);
     for (int i = 1; i <= 5; ++i) {
         double price_offset = i * spread / 2;
-        order_book["BID"].emplace_back(mid_price - price_offset, size_dist(rng), generate_order_id(), current_time());
-        order_book["ASK"].emplace_back(mid_price + price_offset, size_dist(rng), generate_order_id(), current_time());
+        bid_levels_.emplace_back(mid_price - price_offset, size_dist(rng), generate_order_id(), current_time());
+        ask_levels_.emplace_back(mid_price + price_offset, size_dist(rng), generate_order_id(), current_time());
     }
 }
 
@@ -106,9 +124,10 @@ MarketDataEvent MarketSimulator::generate_event() {
 
     update_order_book();
 
-    std::vector<Trade> trades;
-    std::vector<FillEvent> mm_fills;
-    simulate_trade_activity(trades, mm_fills);
+    // Reuse pre-allocated buffers
+    trades_buf_.clear();
+    mm_fills_buf_.clear();
+    simulate_trade_activity(trades_buf_, mm_fills_buf_);
 
     auto event_creation_time = current_time();
     if (latency_ms > 0) {
@@ -117,7 +136,7 @@ MarketDataEvent MarketSimulator::generate_event() {
 
     // Build partial_fills from mm_fills for backwards compatibility
     std::vector<PartialFillEvent> partial_fills;
-    for (const auto& fill : mm_fills) {
+    for (const auto& fill : mm_fills_buf_) {
         if (fill.leaves_qty > 0) {
             partial_fills.push_back(PartialFillEvent{
                 fill.order_id,
@@ -131,20 +150,24 @@ MarketDataEvent MarketSimulator::generate_event() {
 
     MarketDataEvent event{
         instrument,
-        order_book["BID"].empty() ? 0.0 : order_book["BID"].front().price,
-        order_book["ASK"].empty() ? 0.0 : order_book["ASK"].front().price,
-        order_book["BID"].empty() ? 0 : order_book["BID"].front().size,
-        order_book["ASK"].empty() ? 0 : order_book["ASK"].front().size,
-        order_book["BID"],
-        order_book["ASK"],
-        trades,
-        partial_fills,
-        mm_fills,
+        bid_levels_.empty() ? 0.0 : bid_levels_.front().price,
+        ask_levels_.empty() ? 0.0 : ask_levels_.front().price,
+        bid_levels_.empty() ? 0 : bid_levels_.front().size,
+        ask_levels_.empty() ? 0 : ask_levels_.front().size,
+        bid_levels_,
+        ask_levels_,
+        std::move(trades_buf_),
+        std::move(partial_fills),
+        std::move(mm_fills_buf_),
         event_creation_time,
         ++sequence_number
     };
 
     maybe_write_event_log(event);
+
+    // Re-initialize moved-from buffers for next event
+    trades_buf_.reserve(4);
+    mm_fills_buf_.reserve(8);
 
     return event;
 }
@@ -156,18 +179,17 @@ void MarketSimulator::simulate_trade_activity(std::vector<Trade>& trades, std::v
     // 20% chance of trade activity
     if (prob_dist(rng) < 0.2) {
         bool is_buy = prob_dist(rng) < 0.5;
-        std::string side_str = is_buy ? "BUY" : "SELL";
         Side aggressor_side = is_buy ? Side::BUY : Side::SELL;
-        auto& levels = is_buy ? order_book["ASK"] : order_book["BID"];
+        auto& levels = is_buy ? ask_levels_ : bid_levels_;
 
         if (!levels.empty()) {
             int trade_size = size_dist(rng);
             double trade_price = levels[0].price;
-            std::string trade_id = "TRADE_" + std::to_string(sequence_number + 1);
+            uint64_t trade_id = kTradeIdTag | static_cast<uint64_t>(sequence_number + 1);
             auto ts = current_time();
 
             trades.emplace_back(Trade{
-                side_str,
+                aggressor_side,
                 trade_price,
                 trade_size,
                 trade_id,
@@ -186,7 +208,7 @@ OrderStatus MarketSimulator::submit_order(const Order& order) {
     return matching_engine.add_order(order);
 }
 
-bool MarketSimulator::cancel_order(const std::string& order_id) {
+bool MarketSimulator::cancel_order(uint64_t order_id) {
     return matching_engine.cancel_order(order_id);
 }
 
@@ -194,24 +216,23 @@ void MarketSimulator::update_order_book() {
     std::uniform_real_distribution<> change_dist(-0.001, 0.001);
     std::uniform_int_distribution<> size_change_dist(-2, 2);
 
-    for (const auto& side : {"BID", "ASK"}) {
-        for (auto& level : order_book[side]) {
-            level.price += change_dist(rng);
-            level.size = std::max(1, level.size + size_change_dist(rng));
-        }
-
-        if (std::string(side) == "BID") {
-            std::sort(order_book[side].begin(), order_book[side].end(),
-                      [](const OrderLevel& a, const OrderLevel& b) { return a.price > b.price; });
-        } else {
-            std::sort(order_book[side].begin(), order_book[side].end(),
-                      [](const OrderLevel& a, const OrderLevel& b) { return a.price < b.price; });
-        }
+    for (auto& level : bid_levels_) {
+        level.price += change_dist(rng);
+        level.size = std::max(1, level.size + size_change_dist(rng));
     }
+    std::sort(bid_levels_.begin(), bid_levels_.end(),
+              [](const OrderLevel& a, const OrderLevel& b) { return a.price > b.price; });
+
+    for (auto& level : ask_levels_) {
+        level.price += change_dist(rng);
+        level.size = std::max(1, level.size + size_change_dist(rng));
+    }
+    std::sort(ask_levels_.begin(), ask_levels_.end(),
+              [](const OrderLevel& a, const OrderLevel& b) { return a.price < b.price; });
 }
 
-std::string MarketSimulator::generate_order_id() {
-    return "SIM_" + std::to_string(sequence_number) + "_" + std::to_string(order_book["BID"].size() + order_book["ASK"].size() + 1);
+uint64_t MarketSimulator::generate_order_id() {
+    return kSimOrderTag | ++sim_order_counter_;
 }
 
 std::chrono::system_clock::time_point MarketSimulator::current_time() {
@@ -245,7 +266,7 @@ std::string MarketSimulator::serialize_event(const MarketDataEvent& event) {
         oss << std::setprecision(std::numeric_limits<double>::max_digits10);
         for (std::size_t i = 0; i < trades.size(); ++i) {
             const auto& trade = trades[i];
-            oss << trade.aggressor_side << "," << trade.price << "," << trade.size << "," << trade.trade_id << "," << to_millis(trade.timestamp);
+            oss << side_to_str(trade.aggressor_side) << "," << trade.price << "," << trade.size << "," << trade.trade_id << "," << to_millis(trade.timestamp);
             if (i + 1 < trades.size()) {
                 oss << ";";
             }
@@ -304,7 +325,7 @@ MarketDataEvent MarketSimulator::deserialize_event(const std::string& line) {
             levels.emplace_back(
                 std::stod(tokens[0]),
                 std::stoi(tokens[1]),
-                tokens[2],
+                std::stoull(tokens[2]),
                 from_millis(std::stoll(tokens[3])));
         }
         return levels;
@@ -324,10 +345,10 @@ MarketDataEvent MarketSimulator::deserialize_event(const std::string& line) {
                 throw std::runtime_error("Malformed trade entry");
             }
             trades.push_back(Trade{
-                tokens[0],
+                str_to_side(tokens[0]),
                 std::stod(tokens[1]),
                 std::stoi(tokens[2]),
-                tokens[3],
+                std::stoull(tokens[3]),
                 from_millis(std::stoll(tokens[4]))});
         }
         return trades;
@@ -347,7 +368,7 @@ MarketDataEvent MarketSimulator::deserialize_event(const std::string& line) {
                 throw std::runtime_error("Malformed partial fill entry");
             }
             fills.push_back(PartialFillEvent{
-                tokens[0],
+                std::stoull(tokens[0]),
                 std::stod(tokens[1]),
                 std::stoi(tokens[2]),
                 std::stoi(tokens[3]),

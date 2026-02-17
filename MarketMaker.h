@@ -6,10 +6,10 @@
 #include "include/Accounting.h"
 #include "include/RiskManager.h"
 #include "include/Strategy.h"
-#include <map>
+#include <unordered_map>
 #include <vector>
 #include <chrono>
-#include <string>
+#include <cstdint>
 #include <memory>
 
 class MarketSimulator;
@@ -38,8 +38,10 @@ public:
     const std::vector<RiskRuleResult>& get_risk_details() const;
 
 private:
-    std::map<std::string, Order> active_orders;
-    std::vector<MarketDataEvent> market_data_log;
+    std::unordered_map<uint64_t, Order> active_orders;
+    double last_bid_price_ = 0.0;
+    double last_ask_price_ = 0.0;
+    bool has_last_event_ = false;
     Accounting accounting_{100000.0};
     RiskManager risk_manager_;
     std::unique_ptr<Strategy> strategy_;
@@ -51,7 +53,7 @@ private:
     void on_fill(const FillEvent& fill);
     void update_quotes(const MarketDataEvent& md, MarketSimulator& simulator);
     void cancel_all_orders(MarketSimulator& simulator);
-    std::string generate_order_id();
+    uint64_t generate_order_id();
 };
 
 #endif

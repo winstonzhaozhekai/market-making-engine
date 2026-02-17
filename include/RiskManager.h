@@ -5,7 +5,6 @@
 #include "../MarketDataEvent.h"
 #include <vector>
 #include <deque>
-#include <string>
 #include <chrono>
 
 enum class RiskState { Normal, Warning, Breached, KillSwitch };
@@ -25,7 +24,7 @@ struct RiskRuleResult {
     RiskState level;
     double current_value;
     double limit_value;
-    std::string message;
+    const char* tag;  // static label instead of dynamic string
 };
 
 struct RiskConfig {

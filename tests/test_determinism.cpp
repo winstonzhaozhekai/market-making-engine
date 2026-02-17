@@ -42,7 +42,7 @@ std::string event_fingerprint(const MarketDataEvent& md) {
        << md.best_bid_size << "|"
        << md.best_ask_size;
     for (const auto& trade : md.trades) {
-        fp << "|T:" << trade.aggressor_side << ":"
+        fp << "|T:" << (trade.aggressor_side == Side::BUY ? "BUY" : "SELL") << ":"
            << std::fixed << std::setprecision(6) << trade.price << ":" << trade.size;
     }
     for (const auto& fill : md.partial_fills) {

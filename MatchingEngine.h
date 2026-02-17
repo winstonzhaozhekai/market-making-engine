@@ -2,15 +2,15 @@
 #define MATCHING_ENGINE_H
 
 #include "Order.h"
-#include <string>
+#include <cstdint>
 #include <vector>
 
 class MatchingEngine {
 public:
     OrderStatus add_order(Order order);
-    bool cancel_order(const std::string& order_id);
+    bool cancel_order(uint64_t order_id);
     std::vector<FillEvent> match_incoming_order(Side aggressor_side, double price, int qty,
-                                                 const std::string& trade_id,
+                                                 uint64_t trade_id,
                                                  std::chrono::system_clock::time_point timestamp);
 
     const std::vector<Order>& get_bids() const { return bid_book; }

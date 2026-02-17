@@ -27,8 +27,8 @@ StrategySnapshot make_snap(double mid, int position = 0, int max_pos = 1000) {
     snap.best_bid = mid - 0.05;
     snap.best_ask = mid + 0.05;
     snap.mid_price = mid;
-    snap.bid_levels.emplace_back(mid - 0.05, 100, "B1", base_time());
-    snap.ask_levels.emplace_back(mid + 0.05, 100, "A1", base_time());
+    snap.bid_levels.emplace_back(mid - 0.05, 100, 1ULL, base_time());
+    snap.ask_levels.emplace_back(mid + 0.05, 100, 2ULL, base_time());
     snap.position = position;
     snap.max_position = max_pos;
     snap.timestamp = base_time();
@@ -36,12 +36,12 @@ StrategySnapshot make_snap(double mid, int position = 0, int max_pos = 1000) {
     return snap;
 }
 
-Trade make_trade(const std::string& side, double price, int size) {
+Trade make_trade(Side side, double price, int size) {
     Trade t;
     t.aggressor_side = side;
     t.price = price;
     t.size = size;
-    t.trade_id = "T1";
+    t.trade_id = 100;
     t.timestamp = base_time();
     return t;
 }
@@ -93,8 +93,8 @@ void test_ofi_zero_with_no_trades() {
 void test_ofi_plus_one_for_all_buys() {
     RollingOFI ofi(50);
     std::vector<Trade> trades;
-    trades.push_back(make_trade("BUY", 100.0, 10));
-    trades.push_back(make_trade("BUY", 100.0, 20));
+    trades.push_back(make_trade(Side::BUY, 100.0, 10));
+    trades.push_back(make_trade(Side::BUY, 100.0, 20));
     ofi.on_trades(trades);
     assert(near(ofi.normalized_ofi(), 1.0));
     std::cout << "PASS: ofi_plus_one_for_all_buys\n";
@@ -103,8 +103,8 @@ void test_ofi_plus_one_for_all_buys() {
 void test_ofi_mixed_trades() {
     RollingOFI ofi(50);
     std::vector<Trade> trades;
-    trades.push_back(make_trade("BUY", 100.0, 30));
-    trades.push_back(make_trade("SELL", 100.0, 10));
+    trades.push_back(make_trade(Side::BUY, 100.0, 30));
+    trades.push_back(make_trade(Side::SELL, 100.0, 10));
     ofi.on_trades(trades);
     // net = 30 - 10 = 20, total = 40, normalized = 0.5
     assert(near(ofi.normalized_ofi(), 0.5));
@@ -373,14 +373,14 @@ void test_as_high_ofi_widens_spread() {
         auto snap_no = make_snap(mid, 0, 1000);
         auto snap_ofi = make_snap(mid, 0, 1000);
         // Add buy-heavy trades to the OFI version
-        snap_ofi.trades.push_back(make_trade("BUY", mid, 100));
+        snap_ofi.trades.push_back(make_trade(Side::BUY, mid, 100));
         s_no_ofi.compute_quotes(snap_no);
         s_ofi.compute_quotes(snap_ofi);
     }
 
     auto snap_no = make_snap(100.0, 0, 1000);
     auto snap_ofi = make_snap(100.0, 0, 1000);
-    snap_ofi.trades.push_back(make_trade("BUY", 100.0, 100));
+    snap_ofi.trades.push_back(make_trade(Side::BUY, 100.0, 100));
     QuoteDecision d_no = s_no_ofi.compute_quotes(snap_no);
     QuoteDecision d_ofi = s_ofi.compute_quotes(snap_ofi);
 
@@ -401,12 +401,12 @@ void test_as_pull_on_toxic_true() {
     // Feed all-buy trades to build high OFI
     for (int i = 0; i < 10; ++i) {
         auto snap = make_snap(100.0 + i * 0.01, 0, 1000);
-        snap.trades.push_back(make_trade("BUY", 100.0, 50));
+        snap.trades.push_back(make_trade(Side::BUY, 100.0, 50));
         strat.compute_quotes(snap);
     }
 
     auto snap = make_snap(100.0, 0, 1000);
-    snap.trades.push_back(make_trade("BUY", 100.0, 50));
+    snap.trades.push_back(make_trade(Side::BUY, 100.0, 50));
     QuoteDecision d = strat.compute_quotes(snap);
     assert(!d.should_quote);
     std::cout << "PASS: as_pull_on_toxic_true\n";
@@ -425,12 +425,12 @@ void test_as_pull_on_toxic_false_still_quotes_wider() {
 
     for (int i = 0; i < 10; ++i) {
         auto snap = make_snap(100.0 + i * 0.01, 0, 1000);
-        snap.trades.push_back(make_trade("BUY", 100.0, 50));
+        snap.trades.push_back(make_trade(Side::BUY, 100.0, 50));
         strat.compute_quotes(snap);
     }
 
     auto snap = make_snap(100.0, 0, 1000);
-    snap.trades.push_back(make_trade("BUY", 100.0, 50));
+    snap.trades.push_back(make_trade(Side::BUY, 100.0, 50));
     QuoteDecision d = strat.compute_quotes(snap);
     assert(d.should_quote);  // Still quoting
     std::cout << "PASS: as_pull_on_toxic_false_still_quotes_wider\n";
@@ -454,9 +454,9 @@ void test_integration_200_snapshots() {
         auto snap = make_snap(mid, (i % 20) - 10, 1000);
         // Alternate buy/sell trades
         if (i % 3 == 0) {
-            snap.trades.push_back(make_trade("BUY", mid, 10));
+            snap.trades.push_back(make_trade(Side::BUY, mid, 10));
         } else if (i % 3 == 1) {
-            snap.trades.push_back(make_trade("SELL", mid, 10));
+            snap.trades.push_back(make_trade(Side::SELL, mid, 10));
         }
         last = strat.compute_quotes(snap);
     }
@@ -475,9 +475,9 @@ void test_integration_200_snapshots() {
         double mid = 100.0 + 0.5 * std::sin(i * 0.1);
         auto snap = make_snap(mid, (i % 20) - 10, 1000);
         if (i % 3 == 0) {
-            snap.trades.push_back(make_trade("BUY", mid, 10));
+            snap.trades.push_back(make_trade(Side::BUY, mid, 10));
         } else if (i % 3 == 1) {
-            snap.trades.push_back(make_trade("SELL", mid, 10));
+            snap.trades.push_back(make_trade(Side::SELL, mid, 10));
         }
         last2 = strat2.compute_quotes(snap);
     }
