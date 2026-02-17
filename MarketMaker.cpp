@@ -9,6 +9,11 @@ MarketMaker::MarketMaker() {
     last_quote_time = std::chrono::system_clock::now();
 }
 
+MarketMaker::MarketMaker(const RiskConfig& cfg)
+    : risk_manager_(cfg) {
+    last_quote_time = std::chrono::system_clock::now();
+}
+
 void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& simulator) {
     if (md.sequence_number != last_processed_sequence + 1 && last_processed_sequence != 0) {
         std::cout << "WARNING: Sequence gap detected. Missed "
@@ -33,7 +38,9 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
     double mid_price = (md.best_bid_price + md.best_ask_price) / 2.0;
     accounting_.mark_to_market(mid_price);
 
-    if (!check_risk_limits(md)) {
+    risk_manager_.evaluate(accounting_, md, mid_price);
+    if (!risk_manager_.is_quoting_allowed()) {
+        cancel_all_orders(simulator);
         return;
     }
 
@@ -68,21 +75,9 @@ void MarketMaker::on_fill(const FillEvent& fill) {
               << " unrealized=" << accounting_.unrealized_pnl() << "\n";
 }
 
-bool MarketMaker::check_risk_limits(const MarketDataEvent& md) {
-    if (std::abs(accounting_.position()) > risk_limits.max_position) {
-        return false;
-    }
-    if (accounting_.net_pnl() < -risk_limits.max_daily_loss) {
-        return false;
-    }
-    if (md.best_ask_price - md.best_bid_price > risk_limits.max_quote_spread) {
-        return false;
-    }
-    return true;
-}
-
 void MarketMaker::cancel_all_orders(MarketSimulator& simulator) {
     for (auto it = active_orders.begin(); it != active_orders.end(); ) {
+        risk_manager_.record_cancel(it->second.created_at);
         simulator.cancel_order(it->first);
         it = active_orders.erase(it);
     }
@@ -106,8 +101,9 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     int bid_size = calculate_optimal_quote_size(md, Side::BUY);
     int ask_size = calculate_optimal_quote_size(md, Side::SELL);
 
-    bid_size = std::max(risk_limits.min_quote_size, std::min(bid_size, risk_limits.max_quote_size));
-    ask_size = std::max(risk_limits.min_quote_size, std::min(ask_size, risk_limits.max_quote_size));
+    const auto& cfg = risk_manager_.config();
+    bid_size = std::max(cfg.min_quote_size, std::min(bid_size, cfg.max_quote_size));
+    ask_size = std::max(cfg.min_quote_size, std::min(ask_size, cfg.max_quote_size));
 
     // Submit bid
     std::string bid_id = generate_order_id();
@@ -115,6 +111,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     if (simulator.submit_order(bid_order) == OrderStatus::ACKNOWLEDGED) {
         bid_order.status = OrderStatus::ACKNOWLEDGED;
         active_orders.emplace(bid_id, bid_order);
+        risk_manager_.record_quote(md.timestamp);
     }
 
     // Submit ask
@@ -123,6 +120,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     if (simulator.submit_order(ask_order) == OrderStatus::ACKNOWLEDGED) {
         ask_order.status = OrderStatus::ACKNOWLEDGED;
         active_orders.emplace(ask_id, ask_order);
+        risk_manager_.record_quote(md.timestamp);
     }
 
     last_quote_time = md.timestamp;
@@ -146,15 +144,25 @@ int MarketMaker::calculate_optimal_quote_size(const MarketDataEvent& md, Side si
         market_depth = md.ask_levels[0].size;
     }
 
-    double inventory_factor = 1.0 - std::abs(accounting_.position()) / static_cast<double>(risk_limits.max_position);
+    double inventory_factor = 1.0 - std::abs(accounting_.position()) / static_cast<double>(risk_manager_.config().max_net_position);
     inventory_factor = std::max(0.1, inventory_factor);
 
     int scaled_size = static_cast<int>(base_size * (1.0 + market_depth * size_factor) * inventory_factor);
-    return std::max(1, std::min(scaled_size, risk_limits.max_quote_size));
+    return std::max(1, std::min(scaled_size, risk_manager_.config().max_quote_size));
 }
 
 std::string MarketMaker::generate_order_id() {
     return "MM_" + std::to_string(++order_counter);
+}
+
+static const char* risk_state_str(RiskState s) {
+    switch (s) {
+        case RiskState::Normal: return "Normal";
+        case RiskState::Warning: return "Warning";
+        case RiskState::Breached: return "Breached";
+        case RiskState::KillSwitch: return "KillSwitch";
+    }
+    return "Unknown";
 }
 
 void MarketMaker::report() {
@@ -180,6 +188,9 @@ void MarketMaker::report() {
     std::cout << "Net PnL: $" << accounting_.net_pnl() << std::endl;
     std::cout << "Gross Exposure: $" << accounting_.gross_exposure(mark) << std::endl;
     std::cout << "Net Exposure: $" << accounting_.net_exposure(mark) << std::endl;
+    std::cout << "Risk State: " << risk_state_str(risk_manager_.current_state()) << std::endl;
+    std::cout << "Drawdown: $" << risk_manager_.current_drawdown() << std::endl;
+    std::cout << "High Water Mark: $" << risk_manager_.high_water_mark() << std::endl;
     std::cout << "Total Fills: " << total_fills << std::endl;
     std::cout << "Active Orders: " << active_orders.size() << std::endl;
     std::cout << "Inventory Skew: " << calculate_inventory_skew() << std::endl;
@@ -240,4 +251,12 @@ double MarketMaker::get_gross_exposure() const {
 
 double MarketMaker::get_net_exposure() const {
     return accounting_.net_exposure(get_mark_price());
+}
+
+RiskState MarketMaker::get_risk_state() const {
+    return risk_manager_.current_state();
+}
+
+const std::vector<RiskRuleResult>& MarketMaker::get_risk_details() const {
+    return risk_manager_.last_results();
 }
