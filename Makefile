@@ -7,7 +7,7 @@ BOOST_LIB = -L/opt/homebrew/Cellar/boost/1.88.0/lib
 BOOST_LINK = -lboost_system -lboost_thread
 
 TARGETS = market_maker_simulator WebSocketServer
-TEST_TARGETS = tests/test_determinism tests/test_matching_engine tests/test_accounting tests/test_risk_manager tests/test_strategy_behavior
+TEST_TARGETS = tests/test_determinism tests/test_matching_engine tests/test_accounting tests/test_risk_manager tests/test_strategy_behavior tests/test_ws_protocol
 BENCH_TARGETS = bench/bench_engine
 
 CORE_SRCS = MarketSimulator.cpp MarketMaker.cpp MatchingEngine.cpp PerformanceModule.cpp RiskManager.cpp strategies/AvellanedaStoikovStrategy.cpp
@@ -17,8 +17,8 @@ all: $(TARGETS)
 market_maker_simulator: market_maker_simulator.cpp $(CORE_SRCS)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ market_maker_simulator.cpp $(CORE_SRCS)
 
-WebSocketServer: WebSocketServer.cpp $(CORE_SRCS)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(BOOST_INCLUDE) $(BOOST_LIB) -o $@ WebSocketServer.cpp $(CORE_SRCS) $(BOOST_LINK)
+WebSocketServer: WebSocketServer.cpp WsSession.cpp include/WsSession.h $(CORE_SRCS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(BOOST_INCLUDE) $(BOOST_LIB) -o $@ WebSocketServer.cpp WsSession.cpp $(CORE_SRCS) $(BOOST_LINK)
 
 bench/bench_engine: bench/bench_engine.cpp $(CORE_SRCS)
 	$(CXX) $(RELEASE_CXXFLAGS) $(INCLUDES) -o $@ bench/bench_engine.cpp $(CORE_SRCS)
@@ -38,12 +38,16 @@ tests/test_risk_manager: tests/test_risk_manager.cpp RiskManager.cpp include/Ris
 tests/test_strategy_behavior: tests/test_strategy_behavior.cpp strategies/AvellanedaStoikovStrategy.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ tests/test_strategy_behavior.cpp strategies/AvellanedaStoikovStrategy.cpp
 
+tests/test_ws_protocol: tests/test_ws_protocol.cpp WsSession.cpp include/WsSession.h $(CORE_SRCS)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(BOOST_INCLUDE) $(BOOST_LIB) -o $@ tests/test_ws_protocol.cpp WsSession.cpp $(CORE_SRCS) $(BOOST_LINK)
+
 test: $(TEST_TARGETS)
 	./tests/test_determinism
 	./tests/test_matching_engine
 	./tests/test_accounting
 	./tests/test_risk_manager
 	./tests/test_strategy_behavior
+	./tests/test_ws_protocol
 
 bench: $(BENCH_TARGETS)
 
