@@ -31,8 +31,8 @@ struct RiskConfig {
     int max_net_position = 1000;
     double max_notional_exposure = 500000.0;
     double max_drawdown = 10000.0;
-    double max_quotes_per_second = 50.0;
-    double max_cancels_per_second = 50.0;
+    double max_quotes_per_second = 10000.0;
+    double max_cancels_per_second = 10000.0;
     double rate_window_seconds = 1.0;
     double max_stale_data_ms = 5000.0;
     double warning_threshold_pct = 0.80;

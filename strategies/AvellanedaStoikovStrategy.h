@@ -6,7 +6,7 @@
 
 struct AvellanedaStoikovConfig {
     double gamma = 0.1;           // risk aversion
-    double kappa = 1.5;           // fill-rate parameter
+    double kappa = 100.0;         // liquidity parameter (higher -> tighter baseline spread)
     double T = 1.0;               // time horizon
     double min_spread_bps = 5.0;  // floor in basis points
     double max_spread_bps = 200.0;// ceiling in basis points

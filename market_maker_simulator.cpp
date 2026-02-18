@@ -204,6 +204,8 @@ int main(int argc, char* argv[]) {
         double sum_ask = 0.0;
         int64_t total_trade_volume = 0;
         int64_t total_partial_fill_volume = 0;
+        int64_t total_mm_fill_volume = 0;
+        int64_t total_mm_fill_count = 0;
         uint64_t checksum = 1469598103934665603ULL;
 
         while (running && processed < config.iterations) {
@@ -246,6 +248,10 @@ int main(int argc, char* argv[]) {
                 event_fp << "|F:" << fill.order_id << ":" << std::fixed << std::setprecision(6)
                          << fill.price << ":" << fill.filled_size << ":" << fill.remaining_size;
             }
+            for (const auto& fill : md.mm_fills) {
+                total_mm_fill_volume += fill.fill_qty;
+                ++total_mm_fill_count;
+            }
             checksum = update_fnv1a(checksum, event_fp.str());
 
             if (!config.quiet && (processed <= 5 || processed % 100 == 0)) {
@@ -270,6 +276,8 @@ int main(int argc, char* argv[]) {
                   << " avg_ask=" << avg_ask
                   << " trade_volume=" << total_trade_volume
                   << " partial_fill_volume=" << total_partial_fill_volume
+                  << " mm_fill_count=" << total_mm_fill_count
+                  << " mm_fill_volume=" << total_mm_fill_volume
                   << " checksum=" << checksum
                   << "\n";
 

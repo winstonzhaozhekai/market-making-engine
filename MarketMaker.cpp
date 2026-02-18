@@ -47,7 +47,7 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
 
     risk_manager_.evaluate(accounting_, md, mid_price);
     if (!risk_manager_.is_quoting_allowed()) {
-        cancel_all_orders(simulator);
+        cancel_all_orders(simulator, md.timestamp);
         return;
     }
 
@@ -85,9 +85,9 @@ void MarketMaker::on_fill(const FillEvent& fill) {
               << " unrealized=" << accounting_.unrealized_pnl() << "\n";
 }
 
-void MarketMaker::cancel_all_orders(MarketSimulator& simulator) {
+void MarketMaker::cancel_all_orders(MarketSimulator& simulator, std::chrono::system_clock::time_point now) {
     for (auto it = active_orders.begin(); it != active_orders.end(); ) {
-        risk_manager_.record_cancel(it->second.created_at);
+        risk_manager_.record_cancel(now);
         simulator.cancel_order(it->first);
         it = active_orders.erase(it);
     }
@@ -95,7 +95,7 @@ void MarketMaker::cancel_all_orders(MarketSimulator& simulator) {
 
 void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simulator) {
     // Cancel stale orders before placing new ones
-    cancel_all_orders(simulator);
+    cancel_all_orders(simulator, md.timestamp);
 
     double best_bid = md.bid_levels[0].price;
     double best_ask = md.ask_levels[0].price;
@@ -254,6 +254,18 @@ double MarketMaker::get_gross_exposure() const {
 
 double MarketMaker::get_net_exposure() const {
     return accounting_.net_exposure(get_mark_price());
+}
+
+double MarketMaker::get_drawdown() const {
+    return risk_manager_.current_drawdown();
+}
+
+double MarketMaker::get_high_water_mark() const {
+    return risk_manager_.high_water_mark();
+}
+
+const char* MarketMaker::get_strategy_name() const {
+    return strategy_ ? strategy_->name() : "unknown";
 }
 
 RiskState MarketMaker::get_risk_state() const {

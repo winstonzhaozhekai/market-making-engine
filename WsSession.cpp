@@ -12,7 +12,9 @@
 #include "MarketMaker.h"
 #include "MarketSimulator.h"
 #include "PerformanceModule.h"
+#include "include/HeuristicStrategy.h"
 #include "include/SimulationConfig.h"
+#include "strategies/AvellanedaStoikovStrategy.h"
 
 namespace {
 
@@ -56,6 +58,20 @@ std::string json_escape(std::string_view input) {
 
 const char* side_to_string(Side side) {
     return side == Side::BUY ? "BUY" : "SELL";
+}
+
+const char* risk_state_to_string(RiskState state) {
+    switch (state) {
+        case RiskState::Normal:
+            return "Normal";
+        case RiskState::Warning:
+            return "Warning";
+        case RiskState::Breached:
+            return "Breached";
+        case RiskState::KillSwitch:
+            return "KillSwitch";
+    }
+    return "Unknown";
 }
 
 } // namespace
@@ -135,7 +151,13 @@ WsSession::WsSession(tcp::socket&& socket, WsSessionConfig config, CloseCallback
       allow_overlapping_(config.allow_overlapping_simulations),
       last_activity_(std::chrono::steady_clock::now()),
       heartbeat_timer_(executor_),
-      inactivity_timer_(executor_) {}
+      inactivity_timer_(executor_),
+      next_strategy_name_(config.strategy_name.empty() ? "heuristic" : config.strategy_name) {
+    next_simulation_config_.iterations = config_.simulation_iterations;
+    next_simulation_config_.latency_ms = config_.simulation_latency_ms;
+    next_simulation_config_.seed = config_.simulation_seed;
+    next_simulation_config_.quiet = true;
+}
 
 WsSession::~WsSession() {
     request_stop_all_simulations();
@@ -209,7 +231,12 @@ void WsSession::on_read(boost::beast::error_code ec, std::size_t bytes_transferr
 void WsSession::handle_command(const std::string& message) {
     cleanup_finished_simulations();
 
-    const wsproto::ClientCommand command = wsproto::parse_command(message);
+    const std::string command_text = trim_copy(message);
+    if (handle_set_command(command_text)) {
+        return;
+    }
+
+    const wsproto::ClientCommand command = wsproto::parse_command(command_text);
     if (command == wsproto::ClientCommand::Unknown) {
         enqueue_outbound_message(make_error_json("unknown_command"));
         return;
@@ -246,6 +273,150 @@ void WsSession::handle_command(const std::string& message) {
         const int run_id = start_simulation_task();
         enqueue_outbound_message(make_status_json("started", "simulation_started", run_id));
     }
+}
+
+bool WsSession::handle_set_command(const std::string& message) {
+    if (message == "set_allow_overlap:true" || message == "set_allow_overlap:false") {
+        return false;
+    }
+
+    auto extract_value = [&message](const char* prefix, std::string& value) {
+        const std::string key(prefix);
+        if (message.rfind(key, 0) != 0) {
+            return false;
+        }
+        value = message.substr(key.size());
+        return true;
+    };
+
+    auto parse_int = [](const std::string& raw, int& out) {
+        std::size_t idx = 0;
+        try {
+            const long long value = std::stoll(raw, &idx);
+            if (idx != raw.size()) {
+                return false;
+            }
+            if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max()) {
+                return false;
+            }
+            out = static_cast<int>(value);
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+
+    auto parse_uint32 = [](const std::string& raw, uint32_t& out) {
+        std::size_t idx = 0;
+        try {
+            const unsigned long long value = std::stoull(raw, &idx);
+            if (idx != raw.size() || value > std::numeric_limits<uint32_t>::max()) {
+                return false;
+            }
+            out = static_cast<uint32_t>(value);
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+
+    auto parse_double = [](const std::string& raw, double& out) {
+        std::size_t idx = 0;
+        try {
+            out = std::stod(raw, &idx);
+            return idx == raw.size();
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+
+    auto send_config_ack = [this](const std::string& key, const std::string& value) {
+        enqueue_outbound_message(make_status_json("ok", "config_updated:" + key + "=" + value));
+    };
+
+    std::string value;
+    if (extract_value("set_seed:", value)) {
+        uint32_t seed = 0;
+        if (!parse_uint32(value, seed)) {
+            enqueue_outbound_message(make_error_json("invalid_seed"));
+            return true;
+        }
+        next_simulation_config_.seed = seed;
+        send_config_ack("seed", value);
+        return true;
+    }
+
+    if (extract_value("set_iterations:", value)) {
+        int iterations = 0;
+        if (!parse_int(value, iterations) || iterations <= 0) {
+            enqueue_outbound_message(make_error_json("invalid_iterations"));
+            return true;
+        }
+        next_simulation_config_.iterations = iterations;
+        send_config_ack("iterations", value);
+        return true;
+    }
+
+    if (extract_value("set_latency_ms:", value)) {
+        int latency_ms = 0;
+        if (!parse_int(value, latency_ms) || latency_ms < 0) {
+            enqueue_outbound_message(make_error_json("invalid_latency_ms"));
+            return true;
+        }
+        next_simulation_config_.latency_ms = latency_ms;
+        send_config_ack("latency_ms", value);
+        return true;
+    }
+
+    if (extract_value("set_strategy:", value)) {
+        if (value != "heuristic" && value != "avellaneda-stoikov") {
+            enqueue_outbound_message(make_error_json("invalid_strategy"));
+            return true;
+        }
+        next_strategy_name_ = value;
+        send_config_ack("strategy", value);
+        return true;
+    }
+
+    if (extract_value("set_max_net_position:", value)) {
+        int max_net_position = 0;
+        if (!parse_int(value, max_net_position) || max_net_position <= 0) {
+            enqueue_outbound_message(make_error_json("invalid_max_net_position"));
+            return true;
+        }
+        next_risk_config_.max_net_position = max_net_position;
+        send_config_ack("max_net_position", value);
+        return true;
+    }
+
+    if (extract_value("set_max_notional_exposure:", value)) {
+        double max_notional = 0.0;
+        if (!parse_double(value, max_notional) || max_notional <= 0.0) {
+            enqueue_outbound_message(make_error_json("invalid_max_notional_exposure"));
+            return true;
+        }
+        next_risk_config_.max_notional_exposure = max_notional;
+        send_config_ack("max_notional_exposure", value);
+        return true;
+    }
+
+    if (extract_value("set_max_drawdown:", value)) {
+        double max_drawdown = 0.0;
+        if (!parse_double(value, max_drawdown) || max_drawdown <= 0.0) {
+            enqueue_outbound_message(make_error_json("invalid_max_drawdown"));
+            return true;
+        }
+        next_risk_config_.max_drawdown = max_drawdown;
+        send_config_ack("max_drawdown", value);
+        return true;
+    }
+
+    if (message.rfind("set_", 0) == 0) {
+        enqueue_outbound_message(make_error_json("unknown_set_command"));
+        return true;
+    }
+
+    return false;
 }
 
 void WsSession::enqueue_outbound_message(std::string message) {
@@ -335,6 +506,13 @@ void WsSession::on_inactivity_check(boost::beast::error_code ec) {
 int WsSession::start_simulation_task() {
     ++run_counter_;
     const int run_id = run_counter_;
+    SimulationConfig sim_cfg = next_simulation_config_;
+    sim_cfg.mode = SimulationMode::Simulate;
+    sim_cfg.event_log_path.clear();
+    sim_cfg.replay_log_path.clear();
+    sim_cfg.quiet = true;
+    const RiskConfig risk_cfg = next_risk_config_;
+    const std::string strategy_name = next_strategy_name_;
 
     auto task = std::make_shared<SimulationTask>();
     {
@@ -342,9 +520,9 @@ int WsSession::start_simulation_task() {
         simulation_tasks_.push_back(task);
     }
 
-    task->worker = std::thread([weak_self = weak_from_this(), task, run_id] {
+    task->worker = std::thread([weak_self = weak_from_this(), task, run_id, sim_cfg, risk_cfg, strategy_name] {
         if (auto self = weak_self.lock()) {
-            self->run_simulation(task, run_id);
+            self->run_simulation(task, run_id, sim_cfg, risk_cfg, strategy_name);
         } else {
             task->done.store(true, std::memory_order_release);
         }
@@ -353,23 +531,29 @@ int WsSession::start_simulation_task() {
     return run_id;
 }
 
-void WsSession::run_simulation(const std::shared_ptr<SimulationTask>& task, int run_id) {
+void WsSession::run_simulation(
+    const std::shared_ptr<SimulationTask>& task,
+    int run_id,
+    SimulationConfig sim_cfg,
+    RiskConfig risk_cfg,
+    std::string strategy_name) {
     try {
-        SimulationConfig sim_cfg;
-        sim_cfg.latency_ms = config_.simulation_latency_ms;
-        sim_cfg.iterations = config_.simulation_iterations;
-        sim_cfg.seed = static_cast<uint32_t>(42 + run_id);
-        sim_cfg.quiet = true;
-
-        RiskConfig risk_cfg;
+        std::unique_ptr<Strategy> strategy;
+        if (strategy_name == "avellaneda-stoikov") {
+            strategy = std::make_unique<AvellanedaStoikovStrategy>();
+        } else {
+            strategy = std::make_unique<HeuristicStrategy>();
+        }
         MarketSimulator simulator(sim_cfg);
-        MarketMaker mm(risk_cfg);
-        PerformanceModule perf(static_cast<std::size_t>(std::max(1, config_.simulation_iterations)));
+        MarketMaker mm(risk_cfg, std::move(strategy));
+        PerformanceModule perf(static_cast<std::size_t>(std::max(1, sim_cfg.iterations)));
 
         const auto wall_start = std::chrono::steady_clock::now();
         int processed = 0;
+        MarketDataEvent last_md;
+        bool has_last_md = false;
 
-        for (int iteration = 0; iteration < config_.simulation_iterations; ++iteration) {
+        for (int iteration = 0; iteration < sim_cfg.iterations; ++iteration) {
             if (stop_requested_.load(std::memory_order_acquire) ||
                 task->stop_requested.load(std::memory_order_acquire)) {
                 break;
@@ -389,8 +573,26 @@ void WsSession::run_simulation(const std::shared_ptr<SimulationTask>& task, int 
                 std::chrono::duration_cast<std::chrono::nanoseconds>(iter_end - iter_start).count());
 
             ++processed;
+            last_md = md;
+            has_last_md = true;
+            const double elapsed_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
+                                          iter_end - wall_start)
+                                          .count();
+            const double avg_iteration_ms =
+                processed == 0 ? 0.0 : elapsed_ms / static_cast<double>(processed);
+            const double throughput_eps =
+                elapsed_ms <= 0.0 ? 0.0 : (1000.0 * static_cast<double>(processed) / elapsed_ms);
             enqueue_outbound_message(
-                make_update_json(md, iteration, run_id, false, mm, 0.0, 0.0, processed, 0.0));
+                make_update_json(
+                    md,
+                    iteration,
+                    run_id,
+                    false,
+                    mm,
+                    elapsed_ms,
+                    avg_iteration_ms,
+                    processed,
+                    throughput_eps));
         }
 
         const auto wall_end = std::chrono::steady_clock::now();
@@ -399,8 +601,13 @@ void WsSession::run_simulation(const std::shared_ptr<SimulationTask>& task, int 
             std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(wall_end - wall_start).count();
         const double avg_iteration_ms = processed == 0 ? 0.0 : total_runtime_ms / static_cast<double>(processed);
 
+        MarketDataEvent final_md;
+        if (has_last_md) {
+            final_md = last_md;
+            final_md.trades.clear();
+        }
         enqueue_outbound_message(make_update_json(
-            MarketDataEvent{},
+            final_md,
             processed == 0 ? 0 : processed - 1,
             run_id,
             true,
@@ -533,7 +740,7 @@ std::string WsSession::make_update_json(
     const MarketDataEvent& md,
     int iteration,
     int run_id,
-    bool include_metrics,
+    bool is_final,
     const MarketMaker& mm,
     double total_runtime_ms,
     double average_iteration_ms,
@@ -545,6 +752,10 @@ std::string WsSession::make_update_json(
         << ",\"type\":\"simulation_update\""
         << ",\"run_id\":" << run_id
         << ",\"iteration\":" << iteration
+        << ",\"is_final\":" << (is_final ? "true" : "false")
+        << ",\"best_bid_price\":" << md.best_bid_price
+        << ",\"best_ask_price\":" << md.best_ask_price
+        << ",\"spread\":" << (md.best_ask_price - md.best_bid_price)
         << ",\"trades\":[";
 
     for (std::size_t i = 0; i < md.trades.size(); ++i) {
@@ -558,26 +769,29 @@ std::string WsSession::make_update_json(
     }
     out << "]";
 
-    if (include_metrics) {
-        out << ",\"metrics\":{"
-            << "\"total_iterations\":" << processed_iterations
-            << ",\"total_runtime\":" << total_runtime_ms
-            << ",\"average_iteration_time\":" << average_iteration_ms
-            << ",\"throughput_eps\":" << throughput_eps
-            << ",\"inventory\":" << mm.get_inventory()
-            << ",\"cash\":" << mm.get_cash()
-            << ",\"mark_price\":" << mm.get_mark_price()
-            << ",\"realized_pnl\":" << mm.get_realized_pnl()
-            << ",\"unrealized_pnl\":" << mm.get_unrealized_pnl()
-            << ",\"total_pnl\":" << mm.get_total_pnl()
-            << ",\"fees\":" << mm.get_fees()
-            << ",\"rebates\":" << mm.get_rebates()
-            << ",\"avg_entry_price\":" << mm.get_avg_entry_price()
-            << ",\"gross_exposure\":" << mm.get_gross_exposure()
-            << ",\"net_exposure\":" << mm.get_net_exposure()
-            << ",\"inventory_skew\":" << mm.get_inventory_skew()
-            << "}";
-    }
+    out << ",\"metrics\":{"
+        << "\"total_iterations\":" << processed_iterations
+        << ",\"total_runtime\":" << total_runtime_ms
+        << ",\"average_iteration_time\":" << average_iteration_ms
+        << ",\"throughput_eps\":" << throughput_eps
+        << ",\"inventory\":" << mm.get_inventory()
+        << ",\"cash\":" << mm.get_cash()
+        << ",\"mark_price\":" << mm.get_mark_price()
+        << ",\"realized_pnl\":" << mm.get_realized_pnl()
+        << ",\"unrealized_pnl\":" << mm.get_unrealized_pnl()
+        << ",\"total_pnl\":" << mm.get_total_pnl()
+        << ",\"fees\":" << mm.get_fees()
+        << ",\"rebates\":" << mm.get_rebates()
+        << ",\"avg_entry_price\":" << mm.get_avg_entry_price()
+        << ",\"gross_exposure\":" << mm.get_gross_exposure()
+        << ",\"net_exposure\":" << mm.get_net_exposure()
+        << ",\"inventory_skew\":" << mm.get_inventory_skew()
+        << ",\"drawdown\":" << mm.get_drawdown()
+        << ",\"high_water_mark\":" << mm.get_high_water_mark()
+        << ",\"total_fills\":" << mm.get_total_fills()
+        << ",\"risk_state\":\"" << risk_state_to_string(mm.get_risk_state()) << "\""
+        << ",\"strategy\":\"" << json_escape(mm.get_strategy_name()) << "\""
+        << "}";
 
     out << "}";
     return out.str();

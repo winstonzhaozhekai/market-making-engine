@@ -213,19 +213,24 @@ bool MarketSimulator::cancel_order(uint64_t order_id) {
 }
 
 void MarketSimulator::update_order_book() {
-    std::uniform_real_distribution<> change_dist(-0.001, 0.001);
+    std::uniform_real_distribution<> noise_dist(-0.001, 0.001);
     std::uniform_int_distribution<> size_change_dist(-2, 2);
 
-    for (auto& level : bid_levels_) {
-        level.price += change_dist(rng);
-        level.size = std::max(1, level.size + size_change_dist(rng));
+    // Re-anchor each level around mid_price so the book tracks actual price movements.
+    // Without this, bid/ask levels drift far from mid_price, giving the strategy
+    // stale market data and a permanently zero sigma estimate.
+    for (std::size_t i = 0; i < bid_levels_.size(); ++i) {
+        double base_offset = static_cast<double>(i + 1) * spread / 2.0;
+        bid_levels_[i].price = mid_price - base_offset + noise_dist(rng);
+        bid_levels_[i].size = std::max(1, bid_levels_[i].size + size_change_dist(rng));
     }
     std::sort(bid_levels_.begin(), bid_levels_.end(),
               [](const OrderLevel& a, const OrderLevel& b) { return a.price > b.price; });
 
-    for (auto& level : ask_levels_) {
-        level.price += change_dist(rng);
-        level.size = std::max(1, level.size + size_change_dist(rng));
+    for (std::size_t i = 0; i < ask_levels_.size(); ++i) {
+        double base_offset = static_cast<double>(i + 1) * spread / 2.0;
+        ask_levels_[i].price = mid_price + base_offset + noise_dist(rng);
+        ask_levels_[i].size = std::max(1, ask_levels_[i].size + size_change_dist(rng));
     }
     std::sort(ask_levels_.begin(), ask_levels_.end(),
               [](const OrderLevel& a, const OrderLevel& b) { return a.price < b.price; });

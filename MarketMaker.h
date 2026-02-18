@@ -34,6 +34,9 @@ public:
     double get_avg_entry_price() const;
     double get_gross_exposure() const;
     double get_net_exposure() const;
+    double get_drawdown() const;
+    double get_high_water_mark() const;
+    const char* get_strategy_name() const;
     RiskState get_risk_state() const;
     const std::vector<RiskRuleResult>& get_risk_details() const;
 
@@ -52,7 +55,7 @@ private:
 
     void on_fill(const FillEvent& fill);
     void update_quotes(const MarketDataEvent& md, MarketSimulator& simulator);
-    void cancel_all_orders(MarketSimulator& simulator);
+    void cancel_all_orders(MarketSimulator& simulator, std::chrono::system_clock::time_point now);
     uint64_t generate_order_id();
 };
 

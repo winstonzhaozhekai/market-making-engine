@@ -16,6 +16,9 @@
 #include <thread>
 #include <vector>
 
+#include "RiskManager.h"
+#include "SimulationConfig.h"
+
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 namespace websocket = boost::beast::websocket;
@@ -63,6 +66,8 @@ struct WsSessionConfig {
     bool allow_overlapping_simulations = false;
     int simulation_iterations = 1000;
     int simulation_latency_ms = 10;
+    uint32_t simulation_seed = 42;
+    std::string strategy_name = "heuristic";
     std::chrono::seconds heartbeat_interval{5};
     std::chrono::seconds inactivity_timeout{30};
     int schema_version = wsproto::kSchemaVersion;
@@ -99,6 +104,9 @@ private:
     std::chrono::steady_clock::time_point last_activity_;
     net::steady_timer heartbeat_timer_;
     net::steady_timer inactivity_timer_;
+    SimulationConfig next_simulation_config_;
+    RiskConfig next_risk_config_;
+    std::string next_strategy_name_;
 
     int run_counter_ = 0;
     std::vector<std::shared_ptr<SimulationTask>> simulation_tasks_;
@@ -108,6 +116,7 @@ private:
     void do_read();
     void on_read(boost::beast::error_code ec, std::size_t bytes_transferred);
     void handle_command(const std::string& message);
+    bool handle_set_command(const std::string& message);
 
     void enqueue_outbound_message(std::string message);
     void do_write();
@@ -119,7 +128,12 @@ private:
     void on_inactivity_check(boost::beast::error_code ec);
 
     int start_simulation_task();
-    void run_simulation(const std::shared_ptr<SimulationTask>& task, int run_id);
+    void run_simulation(
+        const std::shared_ptr<SimulationTask>& task,
+        int run_id,
+        SimulationConfig sim_cfg,
+        RiskConfig risk_cfg,
+        std::string strategy_name);
     void request_stop_all_simulations();
     bool has_active_simulation() const;
     void cleanup_finished_simulations();
@@ -133,7 +147,7 @@ private:
         const MarketDataEvent& md,
         int iteration,
         int run_id,
-        bool include_metrics,
+        bool is_final,
         const MarketMaker& mm,
         double total_runtime_ms,
         double average_iteration_ms,
