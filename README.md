@@ -204,11 +204,13 @@ Planned future iterations:
   - Migrate hot-path price representation to integer fixed-point ticks.
   - Add experiment harness and quant metrics pipeline (Sharpe, drawdown, fill rate, inventory distribution, adverse selection, parameter sweeps).
 - **P1 performance and simulation realism**
-  - Add SPSC lock-free ring buffer for thread-to-thread event handoff.
+  - Add SPSC lock-free ring buffer for thread-to-thread event handoff, with cache-line-padded (`alignas(64)` / `hardware_destructive_interference_size`) producer and consumer indices to eliminate false sharing on the handoff.
   - Add CRTP strategy dispatch path for lower call overhead on benchmark/hot-path builds.
   - Move simulator toward incremental/event-driven LOB evolution (order arrivals, cancellations, market orders, queue position).
 - **P2 engineering quality and model completion**
   - Add CMake build, sanitizer targets (ASan/UBSan/TSan), and CI workflows.
+  - Add a CI-runnable Google Benchmark suite alongside the existing `std::chrono` harness so per-component microbenchmarks (matching, accounting, risk, strategy) can be tracked over time.
+  - Add a Linux profiling target driven by `perf stat` / `perf record` for branch-miss, cache-miss, and IPC counters on the hot path, plus an Instruments equivalent for macOS dev runs.
   - Complete Avellaneda-Stoikov calibration features (decaying horizon and fill-data-driven kappa estimation).
 - **P3 advanced differentiation**
   - Extend to multi-symbol simulation with correlation-aware, portfolio-level risk controls.
