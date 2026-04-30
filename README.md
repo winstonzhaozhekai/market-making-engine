@@ -2,6 +2,25 @@
 
 HFT-style market making simulator built in C++ with deterministic replay, matching/accounting/risk modules, a WebSocket runtime, and a React analytics UI.
 
+## Performance
+
+Order-handling hot path (`MarketMaker::on_market_data`), measured per-event with `std::chrono::steady_clock`, 1,000,000 events, seed 42, `-O3 -march=native -flto`:
+
+| Strategy            | p90    | p99    | p99.9   | Throughput     | Wall   |
+|---------------------|--------|--------|---------|----------------|--------|
+| heuristic           | 42 ns  | 167 ns | 1.00 µs | 3.07 M ev/sec  | 326 ms |
+| avellaneda-stoikov  | 42 ns  | 292 ns | 1.12 µs | 3.17 M ev/sec  | 315 ms |
+
+p50 is omitted because the per-event work falls below the host clock's tick resolution (~41 ns on Apple Silicon `mach_absolute_time`); p90/p99/throughput are the meaningful figures.
+
+Hardware: Apple M4 Pro (12-core), 24 GB, macOS 15.6, Apple clang 17. Reproduce:
+
+```bash
+make bench
+./bench/bench_engine --events 1000000 --seed 42 --strategy heuristic
+./bench/bench_engine --events 1000000 --seed 42 --strategy avellaneda-stoikov
+```
+
 ## What Is Implemented
 
 - Deterministic simulation config and seeded runs (`--seed`, `--iterations`, `--latency-ms`)
@@ -155,8 +174,16 @@ Included test binaries:
 
 ```bash
 make bench
-./bench/bench_engine --events 100000 --seed 42
+./bench/bench_engine --events 1000000 --seed 42 --strategy heuristic
+./bench/bench_engine --events 1000000 --seed 42 --strategy avellaneda-stoikov
 ```
+
+Flags:
+- `--events <n>`: number of market-data events to drive (default 10000)
+- `--seed <n>`: simulator seed (default 42)
+- `--strategy heuristic|avellaneda-stoikov`: strategy under test (default `heuristic`)
+
+The harness measures `MarketMaker::on_market_data` per-event with `std::chrono::steady_clock`, suppresses MarketMaker stdout inside the timed region, and reports min/p50/p90/p99/p99.9/max plus wall-time throughput. See the **Performance** section above for representative numbers.
 
 Profiling helper:
 
@@ -169,7 +196,6 @@ Profiling helper:
 - Architecture and experiment docs (`docs/ARCHITECTURE.md`, `docs/EXPERIMENTS.md`) are not present yet.
 - CLI/front-end runtime config currently exposes only a subset of risk knobs.
 - Replay log serialization includes market data/trades/partial fills; `mm_fills` are not reconstructed from replay log.
-- `bench/bench_engine` currently uses heuristic strategy only.
 - The current simulator uses synthetic event generation and does not model full queue-position dynamics in an exchange-grade LOB.
 
 Planned future iterations:
