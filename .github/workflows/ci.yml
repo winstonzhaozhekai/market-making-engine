@@ -43,9 +43,12 @@ jobs:
           brew install ninja
 
       - name: Bootstrap vcpkg
+        # Full clone (no --depth 1): vcpkg needs the registry tree at the
+        # builtin-baseline pinned in vcpkg.json, which a shallow clone won't
+        # contain once HEAD has moved past it.
         run: |
           mkdir -p "${{ env.VCPKG_DEFAULT_BINARY_CACHE }}"
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git "${{ env.VCPKG_ROOT }}"
+          git clone https://github.com/microsoft/vcpkg.git "${{ env.VCPKG_ROOT }}"
           "${{ env.VCPKG_ROOT }}/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Cache vcpkg installed packages
