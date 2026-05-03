@@ -48,9 +48,8 @@ private:
     Accounting accounting_{100000.0};
     RiskManager risk_manager_;
     std::unique_ptr<Strategy> strategy_;
-    std::chrono::system_clock::time_point last_quote_time;
     int64_t last_processed_sequence = 0;
-    int order_counter = 0;
+    uint64_t order_counter = 0;
     int total_fills = 0;
 
     void on_fill(const FillEvent& fill);

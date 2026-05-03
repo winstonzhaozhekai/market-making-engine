@@ -1,3 +1,4 @@
+#include <atomic>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -7,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 #include "MarketSimulator.h"
 #include "MarketMaker.h"
 #include "include/SimulationConfig.h"
@@ -16,11 +18,15 @@
 
 using namespace std;
 
-volatile bool running = true;
+std::atomic<bool> running{true};
 
-void signal_handler(int signal) {
-    running = false;
-    std::cout << "\nReceived signal " << signal << ", shutting down.\n";
+// Signal handler must use only async-signal-safe functions (POSIX).
+// std::cout / iostreams are not safe; use write(2) on a fixed buffer.
+void signal_handler(int /*signal*/) {
+    running.store(false, std::memory_order_relaxed);
+    static const char msg[] = "\nReceived shutdown signal.\n";
+    ssize_t r = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    (void)r;
 }
 
 namespace {

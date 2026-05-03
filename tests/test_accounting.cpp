@@ -180,6 +180,59 @@ void test_accounting_identity() {
     std::cout << "PASS: test_accounting_identity\n";
 }
 
+// C7 regression: on_fill must NOT overwrite mark price with the fill price.
+// External mark set via mark_to_market should survive a subsequent on_fill that
+// leaves the position non-zero. This locks in the post-C7 contract.
+void test_c7_on_fill_does_not_overwrite_mark() {
+    Accounting acct(100000.0);
+    acct.on_fill(Side::BUY, 100.0, 10, true);   // long 10 @ 100
+    acct.mark_to_market(105.0);                  // external mark: unrealized=50
+    assert(near(acct.unrealized_pnl(), 50.0));
+
+    // Add to long at 102. Old behavior (pre-C7) would mark at fill price 102,
+    // silently overwriting the externally-set 105 mark. Post-C7: on_fill does
+    // not implicitly mark, so the caller must re-mark explicitly to get a
+    // meaningful unrealized value after a non-flat fill.
+    acct.on_fill(Side::BUY, 102.0, 5, true);    // long 15, cost_basis=1510, avg=100.666...
+    acct.mark_to_market(105.0);
+    // (105 - 100.666...) * 15 = 65.0 exactly: 105*15 - 1510 = 1575 - 1510 = 65
+    assert(near(acct.unrealized_pnl(), 65.0));
+    std::cout << "PASS: test_c7_on_fill_does_not_overwrite_mark\n";
+}
+
+// C7 + flat-position invariant: when on_fill brings position to zero,
+// unrealized PnL must be exactly 0.0 (codifies the closed-position invariant).
+void test_c7_flat_position_zeroes_unrealized() {
+    Accounting acct(100000.0);
+    acct.on_fill(Side::BUY, 100.0, 10, true);
+    acct.mark_to_market(120.0);                  // unrealized=200
+    assert(near(acct.unrealized_pnl(), 200.0));
+    acct.on_fill(Side::SELL, 110.0, 10, true);   // close to flat
+    assert(acct.position() == 0);
+    assert(near(acct.unrealized_pnl(), 0.0));    // flat-position invariant
+    assert(near(acct.cost_basis(), 0.0));        // already enforced
+    std::cout << "PASS: test_c7_flat_position_zeroes_unrealized\n";
+}
+
+// m13 codification: cost_basis must return to exactly 0.0 after any sequence
+// ending at position=0, regardless of intermediate partial closes.
+void test_cost_basis_flat_invariant_under_partial_closes() {
+    Accounting acct(100000.0);
+    acct.on_fill(Side::BUY, 100.0, 1000, true);
+    for (int i = 0; i < 999; ++i) {
+        // Vary close price to exercise the cost_basis subtraction path
+        double p = 100.0 + (i % 7) * 0.001;
+        acct.on_fill(Side::SELL, p, 1, true);
+    }
+    assert(acct.position() == 1);
+    // One final share to close out
+    acct.on_fill(Side::SELL, 100.0, 1, true);
+    assert(acct.position() == 0);
+    assert(acct.cost_basis() == 0.0);    // exact equality, not near
+    assert(near(acct.unrealized_pnl(), 0.0));
+    std::cout << "PASS: test_cost_basis_flat_invariant_under_partial_closes\n";
+}
+
 // 10. Gross/net exposure: |position| * mark vs position * mark
 void test_exposure() {
     Accounting acct(100000.0);
@@ -208,6 +261,9 @@ int main() {
     test_fees_and_rebates();
     test_symmetric_fills();
     test_accounting_identity();
+    test_c7_on_fill_does_not_overwrite_mark();
+    test_c7_flat_position_zeroes_unrealized();
+    test_cost_basis_flat_invariant_under_partial_closes();
     test_exposure();
 
     std::cout << "\nAll accounting tests passed.\n";

@@ -50,13 +50,26 @@ struct SessionProtocolState {
     bool allow_overlap = false;
 };
 
+// Default outbound queue capacity. A slow client cannot make the simulation
+// worker thread accumulate updates without bound: once the queue is full,
+// new messages are dropped and `OutboundQueueState::dropped_count` is
+// incremented. Operators can detect drops via the server-side stderr log
+// emitted by `WsSession::enqueue_outbound_message`.
+constexpr std::size_t kDefaultOutboundQueueCapacity = 1024;
+
 struct OutboundQueueState {
     bool write_in_progress = false;
     std::deque<std::string> queue;
+    std::size_t max_queue_size = kDefaultOutboundQueueCapacity;
+    uint64_t dropped_count = 0;
 };
 
 ClientCommand parse_command(const std::string& message);
 CommandAction apply_command(SessionProtocolState& state, ClientCommand command);
+// Returns true iff the caller should kick off `do_write()` (i.e. the message
+// was enqueued AND no write was previously in flight). Returns false if the
+// message was dropped due to capacity OR if a write is already in flight.
+// On drop, `state.dropped_count` is incremented and `state.queue` is unchanged.
 bool enqueue_outbound(OutboundQueueState& state, std::string message);
 bool complete_outbound_write(OutboundQueueState& state);
 
@@ -98,9 +111,24 @@ private:
     CloseCallback on_close_;
 
     bool close_notified_ = false;
+    // Threading invariant: `stopping_` is touched only on the executor thread.
+    // All call sites verified 2026-05-02:
+    //   - `on_read`, `on_heartbeat`, `on_inactivity_check` run as Asio handlers
+    //     on the executor.
+    //   - `enqueue_outbound_message` reads `stopping_` only inside a lambda
+    //     posted via `net::post(executor_, ...)` (so the read runs on the
+    //     executor too, not on the calling worker thread).
+    //   - `stop_with_reason` writes `stopping_` and is invoked either directly
+    //     from an executor handler or via `net::post(executor_, ...)`.
+    // Because the `io_context` is run from a single thread (see
+    // `WebSocketServer::run`), `stopping_` is effectively single-threaded and
+    // does not need to be atomic. Re-validate this invariant under TSan when
+    // the toolchain milestone (M2) lands; if the io_context ever runs on a
+    // thread pool, `stopping_` must become `std::atomic<bool>`.
     bool stopping_ = false;
     bool allow_overlapping_ = false;
     std::atomic<bool> stop_requested_{false};
+    bool outbound_overflow_logged_ = false;
     std::chrono::steady_clock::time_point last_activity_;
     net::steady_timer heartbeat_timer_;
     net::steady_timer inactivity_timer_;

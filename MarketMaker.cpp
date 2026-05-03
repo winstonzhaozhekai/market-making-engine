@@ -7,19 +7,13 @@
 #include <cmath>
 
 MarketMaker::MarketMaker()
-    : strategy_(std::make_unique<HeuristicStrategy>()) {
-    last_quote_time = std::chrono::system_clock::now();
-}
+    : strategy_(std::make_unique<HeuristicStrategy>()) {}
 
 MarketMaker::MarketMaker(const RiskConfig& cfg)
-    : risk_manager_(cfg), strategy_(std::make_unique<HeuristicStrategy>()) {
-    last_quote_time = std::chrono::system_clock::now();
-}
+    : risk_manager_(cfg), strategy_(std::make_unique<HeuristicStrategy>()) {}
 
 MarketMaker::MarketMaker(const RiskConfig& cfg, std::unique_ptr<Strategy> strategy)
-    : risk_manager_(cfg), strategy_(std::move(strategy)) {
-    last_quote_time = std::chrono::system_clock::now();
-}
+    : risk_manager_(cfg), strategy_(std::move(strategy)) {}
 
 void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& simulator) {
     if (md.sequence_number != last_processed_sequence + 1 && last_processed_sequence != 0) {
@@ -142,8 +136,6 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
         active_orders.emplace(ask_id, ask_order);
         risk_manager_.record_quote(md.timestamp);
     }
-
-    last_quote_time = md.timestamp;
 }
 
 uint64_t MarketMaker::generate_order_id() {

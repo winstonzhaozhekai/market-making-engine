@@ -240,6 +240,21 @@ uint64_t MarketSimulator::generate_order_id() {
     return kSimOrderTag | ++sim_order_counter_;
 }
 
+// `simulation_clock` is a deterministic, monotonic synthetic clock — NOT real
+// wall-clock time. It is initialized from `cfg.seed` and advances by exactly
+// 1 ms on every call. Each `generate_event()` calls this multiple times (once
+// per built timestamp), so a single market-data event spans several "ms" of
+// simulator time. Implications:
+//   - Same-seed runs produce byte-identical timestamps (replay determinism).
+//   - Different seeds produce different absolute timestamps; absolute values
+//     are not comparable across seeds.
+//   - Risk rate-windows and stale-data checks are evaluated against this
+//     synthetic clock, so their semantics are tied to *call frequency*, not
+//     real elapsed time.
+//   - This type uses `system_clock::time_point` only as a typed monotonic
+//     counter. NTP slewing cannot affect it because `system_clock::now()` is
+//     never called for these values. The type will be migrated when integer
+//     ticks land (M3) and per-stage latency lands (M8).
 std::chrono::system_clock::time_point MarketSimulator::current_time() {
     simulation_clock += std::chrono::milliseconds(1);
     return simulation_clock;

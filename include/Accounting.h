@@ -76,13 +76,16 @@ public:
             position_ -= qty;
         }
 
-        // If position is zero, ensure cost basis is clean
+        // Closed-position invariant: when flat, both cost basis and unrealized
+        // PnL must be zero. Do NOT mark-to-market against the fill price here —
+        // that overwrites the externally-set mark with a value that has no
+        // economic meaning between fills, and corrupts unrealized PnL for any
+        // observer that reads accounting state between an `on_fill` and the
+        // next caller-driven `mark_to_market(mid)` call.
         if (position_ == 0) {
             cost_basis_ = 0.0;
+            unrealized_pnl_ = 0.0;
         }
-
-        // Update mark to fill price for unrealized calc
-        mark_to_market(price);
     }
 
     void mark_to_market(double mark_price) {

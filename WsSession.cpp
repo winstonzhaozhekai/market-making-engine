@@ -122,6 +122,13 @@ CommandAction apply_command(SessionProtocolState& state, ClientCommand command) 
 }
 
 bool enqueue_outbound(OutboundQueueState& state, std::string message) {
+    if (state.queue.size() >= state.max_queue_size) {
+        // Slow client / async_write stall: drop the new message rather than
+        // grow the queue without bound. Drop-newest preserves the early
+        // history for the client and allows the writer to make progress.
+        ++state.dropped_count;
+        return false;
+    }
     state.queue.push_back(std::move(message));
     if (state.write_in_progress) {
         return false;
@@ -426,8 +433,23 @@ void WsSession::enqueue_outbound_message(std::string message) {
             if (self->stopping_) {
                 return;
             }
+            const uint64_t before = self->outbound_.dropped_count;
             if (wsproto::enqueue_outbound(self->outbound_, std::move(message))) {
                 self->do_write();
+            }
+            // Operator-visible drop notification: log to stderr exactly once
+            // per overflow burst. Cleared in `complete_outbound_write` when
+            // queue drains below half (low-watermark), so a re-overflow logs
+            // again. Client-side notification is intentionally NOT emitted
+            // here — injecting an error message into a saturated queue would
+            // either be dropped itself or extend the overflow window.
+            if (self->outbound_.dropped_count > before &&
+                !self->outbound_overflow_logged_) {
+                self->outbound_overflow_logged_ = true;
+                std::cerr << "[WsSession] outbound queue saturated (cap="
+                          << self->outbound_.max_queue_size
+                          << "); dropping new updates. total_dropped="
+                          << self->outbound_.dropped_count << "\n";
             }
         });
 }
@@ -451,6 +473,15 @@ void WsSession::on_write(boost::beast::error_code ec) {
     if (ec) {
         stop_with_reason("write_error:" + ec.message());
         return;
+    }
+
+    // Low-watermark reset: once the queue drains to below half capacity,
+    // re-arm the operator-side overflow log so a subsequent overflow burst
+    // produces a fresh stderr line instead of being silently coalesced with
+    // the previous one.
+    if (outbound_overflow_logged_ &&
+        outbound_.queue.size() <= outbound_.max_queue_size / 2) {
+        outbound_overflow_logged_ = false;
     }
 
     if (wsproto::complete_outbound_write(outbound_)) {

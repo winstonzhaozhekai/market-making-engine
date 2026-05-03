@@ -191,33 +191,9 @@ Profiling helper:
 ./scripts/profile.sh 100000 42
 ```
 
-## Known Gaps / Next
+## Roadmap
 
-- Architecture and experiment docs (`docs/ARCHITECTURE.md`, `docs/EXPERIMENTS.md`) are not present yet.
-- CLI/front-end runtime config currently exposes only a subset of risk knobs.
-- Replay log serialization includes market data/trades/partial fills; `mm_fills` are not reconstructed from replay log.
-- The current simulator uses synthetic event generation and does not model full queue-position dynamics in an exchange-grade LOB.
-
-Planned future iterations:
-- **P0 foundation**
-  - Upgrade matching internals to a production-style order book (price-level map + FIFO queues + O(1) cancel lookup).
-  - Migrate hot-path price representation to integer fixed-point ticks.
-  - Add experiment harness and quant metrics pipeline (Sharpe, drawdown, fill rate, inventory distribution, adverse selection, parameter sweeps).
-- **P1 performance and simulation realism**
-  - Add SPSC lock-free ring buffer for thread-to-thread event handoff, with cache-line-padded (`alignas(64)` / `hardware_destructive_interference_size`) producer and consumer indices to eliminate false sharing on the handoff.
-  - Add CRTP strategy dispatch path for lower call overhead on benchmark/hot-path builds.
-  - Move simulator toward incremental/event-driven LOB evolution (order arrivals, cancellations, market orders, queue position).
-- **P2 engineering quality and model completion**
-  - Add CMake build, sanitizer targets (ASan/UBSan/TSan), and CI workflows.
-  - Add a CI-runnable Google Benchmark suite alongside the existing `std::chrono` harness so per-component microbenchmarks (matching, accounting, risk, strategy) can be tracked over time.
-  - Add a Linux profiling target driven by `perf stat` / `perf record` for branch-miss, cache-miss, and IPC counters on the hot path, plus an Instruments equivalent for macOS dev runs.
-  - Complete Avellaneda-Stoikov calibration features (decaying horizon and fill-data-driven kappa estimation).
-- **P3 advanced differentiation**
-  - Extend to multi-symbol simulation with correlation-aware, portfolio-level risk controls.
-  - Integrate microstructure features (e.g., VPIN, Hawkes intensity, Kyle's lambda) into quoting decisions.
-- **Performance goals to validate improvements**
-  - Improve latency/throughput baseline after order book and dispatch upgrades.
-  - Record before/after benchmark history across major iterations.
+Future work, planned iterations, known correctness gaps, and the architecture decisions are tracked in [`docs/ROADMAP.md`](docs/ROADMAP.md). This README intentionally describes only what is currently implemented.
 
 ## Repository Map
 
