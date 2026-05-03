@@ -1,9 +1,9 @@
-#include <cassert>
+#include <gtest/gtest.h>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -12,6 +12,7 @@
 #include "include/SimulationConfig.h"
 
 namespace {
+
 struct RunDigest {
     int processed = 0;
     uint64_t checksum = 1469598103934665603ULL;
@@ -61,56 +62,56 @@ bool nearly_equal(double a, double b, double epsilon = 1e-12) {
     return std::abs(a - b) <= epsilon;
 }
 
-void assert_order_level_equal(const OrderLevel& lhs, const OrderLevel& rhs) {
-    assert(nearly_equal(lhs.price, rhs.price));
-    assert(lhs.size == rhs.size);
-    assert(lhs.order_id == rhs.order_id);
-    assert(to_millis(lhs.timestamp) == to_millis(rhs.timestamp));
+void expect_order_level_equal(const OrderLevel& lhs, const OrderLevel& rhs) {
+    EXPECT_TRUE(nearly_equal(lhs.price, rhs.price));
+    EXPECT_EQ(lhs.size, rhs.size);
+    EXPECT_EQ(lhs.order_id, rhs.order_id);
+    EXPECT_EQ(to_millis(lhs.timestamp), to_millis(rhs.timestamp));
 }
 
-void assert_trade_equal(const Trade& lhs, const Trade& rhs) {
-    assert(lhs.aggressor_side == rhs.aggressor_side);
-    assert(nearly_equal(lhs.price, rhs.price));
-    assert(lhs.size == rhs.size);
-    assert(lhs.trade_id == rhs.trade_id);
-    assert(to_millis(lhs.timestamp) == to_millis(rhs.timestamp));
+void expect_trade_equal(const Trade& lhs, const Trade& rhs) {
+    EXPECT_EQ(lhs.aggressor_side, rhs.aggressor_side);
+    EXPECT_TRUE(nearly_equal(lhs.price, rhs.price));
+    EXPECT_EQ(lhs.size, rhs.size);
+    EXPECT_EQ(lhs.trade_id, rhs.trade_id);
+    EXPECT_EQ(to_millis(lhs.timestamp), to_millis(rhs.timestamp));
 }
 
-void assert_partial_fill_equal(const PartialFillEvent& lhs, const PartialFillEvent& rhs) {
-    assert(lhs.order_id == rhs.order_id);
-    assert(nearly_equal(lhs.price, rhs.price));
-    assert(lhs.filled_size == rhs.filled_size);
-    assert(lhs.remaining_size == rhs.remaining_size);
-    assert(to_millis(lhs.timestamp) == to_millis(rhs.timestamp));
+void expect_partial_fill_equal(const PartialFillEvent& lhs, const PartialFillEvent& rhs) {
+    EXPECT_EQ(lhs.order_id, rhs.order_id);
+    EXPECT_TRUE(nearly_equal(lhs.price, rhs.price));
+    EXPECT_EQ(lhs.filled_size, rhs.filled_size);
+    EXPECT_EQ(lhs.remaining_size, rhs.remaining_size);
+    EXPECT_EQ(to_millis(lhs.timestamp), to_millis(rhs.timestamp));
 }
 
-void assert_event_equal(const MarketDataEvent& lhs, const MarketDataEvent& rhs) {
-    assert(lhs.instrument == rhs.instrument);
-    assert(nearly_equal(lhs.best_bid_price, rhs.best_bid_price));
-    assert(nearly_equal(lhs.best_ask_price, rhs.best_ask_price));
-    assert(lhs.best_bid_size == rhs.best_bid_size);
-    assert(lhs.best_ask_size == rhs.best_ask_size);
-    assert(lhs.sequence_number == rhs.sequence_number);
-    assert(to_millis(lhs.timestamp) == to_millis(rhs.timestamp));
+void expect_event_equal(const MarketDataEvent& lhs, const MarketDataEvent& rhs) {
+    EXPECT_EQ(lhs.instrument, rhs.instrument);
+    EXPECT_TRUE(nearly_equal(lhs.best_bid_price, rhs.best_bid_price));
+    EXPECT_TRUE(nearly_equal(lhs.best_ask_price, rhs.best_ask_price));
+    EXPECT_EQ(lhs.best_bid_size, rhs.best_bid_size);
+    EXPECT_EQ(lhs.best_ask_size, rhs.best_ask_size);
+    EXPECT_EQ(lhs.sequence_number, rhs.sequence_number);
+    EXPECT_EQ(to_millis(lhs.timestamp), to_millis(rhs.timestamp));
 
-    assert(lhs.bid_levels.size() == rhs.bid_levels.size());
+    ASSERT_EQ(lhs.bid_levels.size(), rhs.bid_levels.size());
     for (std::size_t i = 0; i < lhs.bid_levels.size(); ++i) {
-        assert_order_level_equal(lhs.bid_levels[i], rhs.bid_levels[i]);
+        expect_order_level_equal(lhs.bid_levels[i], rhs.bid_levels[i]);
     }
 
-    assert(lhs.ask_levels.size() == rhs.ask_levels.size());
+    ASSERT_EQ(lhs.ask_levels.size(), rhs.ask_levels.size());
     for (std::size_t i = 0; i < lhs.ask_levels.size(); ++i) {
-        assert_order_level_equal(lhs.ask_levels[i], rhs.ask_levels[i]);
+        expect_order_level_equal(lhs.ask_levels[i], rhs.ask_levels[i]);
     }
 
-    assert(lhs.trades.size() == rhs.trades.size());
+    ASSERT_EQ(lhs.trades.size(), rhs.trades.size());
     for (std::size_t i = 0; i < lhs.trades.size(); ++i) {
-        assert_trade_equal(lhs.trades[i], rhs.trades[i]);
+        expect_trade_equal(lhs.trades[i], rhs.trades[i]);
     }
 
-    assert(lhs.partial_fills.size() == rhs.partial_fills.size());
+    ASSERT_EQ(lhs.partial_fills.size(), rhs.partial_fills.size());
     for (std::size_t i = 0; i < lhs.partial_fills.size(); ++i) {
-        assert_partial_fill_equal(lhs.partial_fills[i], rhs.partial_fills[i]);
+        expect_partial_fill_equal(lhs.partial_fills[i], rhs.partial_fills[i]);
     }
 }
 
@@ -141,56 +142,68 @@ RunCapture run_capture(const SimulationConfig& config, int events_to_process) {
     }
     return run;
 }
-} // namespace
 
-int main() {
-    SimulationConfig base;
-    base.iterations = 200;
-    base.latency_ms = 0;
+SimulationConfig base_config() {
+    SimulationConfig c;
+    c.iterations = 200;
+    c.latency_ms = 0;
+    return c;
+}
 
-    SimulationConfig same_seed_a = base;
-    same_seed_a.seed = 12345;
-    const RunCapture run_a = run_capture(same_seed_a, same_seed_a.iterations);
-    assert(run_a.digest.processed == same_seed_a.iterations);
+}  // namespace
 
-    SimulationConfig same_seed_b = base;
-    same_seed_b.seed = 12345;
-    const RunCapture run_b = run_capture(same_seed_b, same_seed_b.iterations);
-    assert(run_b.digest.processed == same_seed_b.iterations);
-    assert(run_a.digest.checksum == run_b.digest.checksum);
-    assert(std::abs(run_a.digest.avg_bid - run_b.digest.avg_bid) < 1e-12);
-    assert(std::abs(run_a.digest.avg_ask - run_b.digest.avg_ask) < 1e-12);
+TEST(Determinism, SameSeedReproducible) {
+    SimulationConfig a = base_config();
+    a.seed = 12345;
+    const RunCapture run_a = run_capture(a, a.iterations);
+    EXPECT_EQ(run_a.digest.processed, a.iterations);
 
-    SimulationConfig different_seed = base;
-    different_seed.seed = 54321;
-    const RunCapture run_c = run_capture(different_seed, different_seed.iterations);
-    assert(run_c.digest.processed == different_seed.iterations);
-    assert(run_a.digest.checksum != run_c.digest.checksum);
+    SimulationConfig b = base_config();
+    b.seed = 12345;
+    const RunCapture run_b = run_capture(b, b.iterations);
+    EXPECT_EQ(run_b.digest.processed, b.iterations);
 
-    const std::string log_path = "/tmp/market_sim_determinism_replay.log";
-    SimulationConfig writer = base;
+    EXPECT_EQ(run_a.digest.checksum, run_b.digest.checksum);
+    EXPECT_LT(std::abs(run_a.digest.avg_bid - run_b.digest.avg_bid), 1e-12);
+    EXPECT_LT(std::abs(run_a.digest.avg_ask - run_b.digest.avg_ask), 1e-12);
+}
+
+TEST(Determinism, DifferentSeedDiverges) {
+    SimulationConfig a = base_config();
+    a.seed = 12345;
+    const RunCapture run_a = run_capture(a, a.iterations);
+
+    SimulationConfig c = base_config();
+    c.seed = 54321;
+    const RunCapture run_c = run_capture(c, c.iterations);
+    EXPECT_EQ(run_c.digest.processed, c.iterations);
+    EXPECT_NE(run_a.digest.checksum, run_c.digest.checksum);
+}
+
+TEST(Determinism, ReplayMatchesGeneration) {
+    const std::string log_path =
+        (std::filesystem::temp_directory_path() / "market_sim_determinism_replay.log").string();
+
+    SimulationConfig writer = base_config();
     writer.seed = 777;
     writer.mode = SimulationMode::Simulate;
     writer.event_log_path = log_path;
     const RunCapture from_generation = run_capture(writer, writer.iterations);
 
-    SimulationConfig replay = base;
+    SimulationConfig replay = base_config();
     replay.seed = 999;
     replay.mode = SimulationMode::Replay;
     replay.replay_log_path = log_path;
     const RunCapture from_replay = run_capture(replay, replay.iterations);
-    assert(from_generation.digest.processed == from_replay.digest.processed);
-    assert(from_generation.digest.checksum == from_replay.digest.checksum);
-    assert(std::abs(from_generation.digest.avg_bid - from_replay.digest.avg_bid) < 1e-12);
-    assert(std::abs(from_generation.digest.avg_ask - from_replay.digest.avg_ask) < 1e-12);
-    assert(from_generation.events.size() == from_replay.events.size());
+
+    EXPECT_EQ(from_generation.digest.processed, from_replay.digest.processed);
+    EXPECT_EQ(from_generation.digest.checksum, from_replay.digest.checksum);
+    EXPECT_LT(std::abs(from_generation.digest.avg_bid - from_replay.digest.avg_bid), 1e-12);
+    EXPECT_LT(std::abs(from_generation.digest.avg_ask - from_replay.digest.avg_ask), 1e-12);
+    ASSERT_EQ(from_generation.events.size(), from_replay.events.size());
     for (std::size_t i = 0; i < from_generation.events.size(); ++i) {
-        assert_event_equal(from_generation.events[i], from_replay.events[i]);
+        expect_event_equal(from_generation.events[i], from_replay.events[i]);
     }
 
     std::remove(log_path.c_str());
-
-    std::cout << "Determinism tests passed: "
-              << "same-seed stable, different-seed diverges, replay matches generation byte-for-byte.\n";
-    return 0;
 }

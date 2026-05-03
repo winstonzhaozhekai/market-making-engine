@@ -16,9 +16,9 @@ p50 is omitted because the per-event work falls below the host clock's tick reso
 Hardware: Apple M4 Pro (12-core), 24 GB, macOS 15.6, Apple clang 17. Reproduce:
 
 ```bash
-make bench
-./bench/bench_engine --events 1000000 --seed 42 --strategy heuristic
-./bench/bench_engine --events 1000000 --seed 42 --strategy avellaneda-stoikov
+cmake --preset release && cmake --build --preset release
+./build/release/bench_engine --events 1000000 --seed 42 --strategy heuristic
+./build/release/bench_engine --events 1000000 --seed 42 --strategy avellaneda-stoikov
 ```
 
 ## What Is Implemented
@@ -68,15 +68,15 @@ make bench
 ## Build Requirements
 
 ### Backend
-- C++17 compiler (`g++` used in `Makefile`)
-- Boost (`asio`/`beast`) for WebSocket targets
-- `make`
-
-Note: `Makefile` currently uses Homebrew Boost paths:
-- `BOOST_INCLUDE = -I/opt/homebrew/Cellar/boost/1.88.0/include`
-- `BOOST_LIB = -L/opt/homebrew/Cellar/boost/1.88.0/lib`
-
-Update those if your Boost install path differs.
+- C++20 compiler (Apple clang 16+, GCC 11+, or Clang 15+)
+- CMake 3.21+ and Ninja
+- vcpkg (manifest mode); `VCPKG_ROOT` exported in your shell. One-time setup:
+  ```bash
+  git clone https://github.com/microsoft/vcpkg.git "$HOME/vcpkg"
+  "$HOME/vcpkg/bootstrap-vcpkg.sh"
+  export VCPKG_ROOT="$HOME/vcpkg"   # add to your shell rc
+  ```
+  Boost (`asio`, `beast`, `system`, `thread`) and GoogleTest are declared in `vcpkg.json` and installed automatically on first configure.
 
 ### Frontend
 - Node.js + npm
@@ -84,13 +84,16 @@ Update those if your Boost install path differs.
 ## Build And Run
 
 ```bash
-make all
+cmake --preset release
+cmake --build --preset release
 ```
+
+Other configure presets: `default` (Debug), `asan` (Debug + ASan/UBSan), `ubsan`, `tsan`. Build outputs land in `build/<preset>/`.
 
 ### CLI simulator
 
 ```bash
-./market_maker_simulator --help
+./build/release/market_maker_simulator --help
 ```
 
 Key options:
@@ -107,14 +110,14 @@ Key options:
 Example deterministic run:
 
 ```bash
-./market_maker_simulator --strategy heuristic --seed 42 --iterations 1000 --latency-ms 0 --quiet
+./build/release/market_maker_simulator --strategy heuristic --seed 42 --iterations 1000 --latency-ms 0 --quiet
 ```
 
 Event log + replay:
 
 ```bash
-./market_maker_simulator --seed 7 --iterations 1000 --latency-ms 0 --event-log /tmp/mm.log --quiet
-./market_maker_simulator --mode replay --replay /tmp/mm.log --iterations 1000 --latency-ms 0 --quiet
+./build/release/market_maker_simulator --seed 7 --iterations 1000 --latency-ms 0 --event-log /tmp/mm.log --quiet
+./build/release/market_maker_simulator --mode replay --replay /tmp/mm.log --iterations 1000 --latency-ms 0 --quiet
 ```
 
 ### WebSocket server + frontend
@@ -122,7 +125,7 @@ Event log + replay:
 1. Start server (port `8080`):
 
 ```bash
-./WebSocketServer
+./build/release/WebSocketServer
 ```
 
 2. Start frontend:
@@ -156,26 +159,33 @@ Outbound message types (all include `schema_version`):
 
 ## Tests
 
-Run full test suite:
+Run the full GoogleTest suite via ctest:
 
 ```bash
-make test
+ctest --preset release
 ```
 
-Included test binaries:
-- `tests/test_determinism`
-- `tests/test_matching_engine`
-- `tests/test_accounting`
-- `tests/test_risk_manager`
-- `tests/test_strategy_behavior`
-- `tests/test_ws_protocol`
+Or under sanitizers:
+
+```bash
+ctest --preset asan
+ctest --preset ubsan
+```
+
+Test binaries (`build/<preset>/tests/`):
+- `test_determinism`
+- `test_matching_engine`
+- `test_accounting`
+- `test_risk_manager`
+- `test_strategy_behavior`
+- `test_ws_protocol`
 
 ## Benchmarking
 
 ```bash
-make bench
-./bench/bench_engine --events 1000000 --seed 42 --strategy heuristic
-./bench/bench_engine --events 1000000 --seed 42 --strategy avellaneda-stoikov
+cmake --build --preset release --target bench_engine
+./build/release/bench_engine --events 1000000 --seed 42 --strategy heuristic
+./build/release/bench_engine --events 1000000 --seed 42 --strategy avellaneda-stoikov
 ```
 
 Flags:

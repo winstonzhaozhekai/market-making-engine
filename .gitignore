@@ -5,6 +5,11 @@
 *.a
 *.so
 
+# CMake / vcpkg
+/vcpkg_installed/
+/CMakeUserPresets.json
+/compile_commands.json
+
 # Ignore IDE-specific files
 .vscode/
 .idea/

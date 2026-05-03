@@ -1,0 +1,25 @@
+include(GoogleTest)
+
+# Helper: declare a test executable, link to GTest + the relevant target(s),
+# and register all TEST() blocks with ctest via gtest_discover_tests.
+function(mme_add_test name)
+    add_executable(${name} ${name}.cpp)
+    target_link_libraries(${name}
+        PRIVATE
+            ${ARGN}
+            GTest::gtest_main
+            mme_warnings
+    )
+    target_include_directories(${name} PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    gtest_discover_tests(${name})
+endfunction()
+
+mme_add_test(test_accounting)
+mme_add_test(test_matching_engine     mme_core)
+mme_add_test(test_risk_manager        mme_core)
+mme_add_test(test_strategy_behavior   mme_core)
+mme_add_test(test_determinism         mme_core)
+mme_add_test(test_ws_protocol         mme_ws)
