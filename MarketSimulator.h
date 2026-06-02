@@ -18,8 +18,12 @@ public:
     explicit MarketSimulator(const SimulationConfig& config);
     MarketDataEvent generate_event();
 
-    OrderStatus submit_order(const Order& order);
+    // `type` is the realistic exchange order-type flag. MM-side callers
+    // pass POST_ONLY; future LIMIT/IOC counterparty agents land in M9.
+    OrderStatus submit_order(const Order& order, OrderType type);
     bool cancel_order(uint64_t order_id);
+    bool amend_order(uint64_t order_id, Ticks new_price, int new_qty,
+                     std::chrono::system_clock::time_point ts);
     const MatchingEngine& get_matching_engine() const { return matching_engine; }
     const Instrument& instrument_meta() const { return instrument_; }
 

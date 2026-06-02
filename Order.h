@@ -8,6 +8,14 @@
 enum class Side { BUY, SELL };
 enum class OrderStatus { NEW, ACKNOWLEDGED, PARTIALLY_FILLED, FILLED, CANCELED, REJECTED };
 
+// Order type / TIF combo, mirroring what real venues actually expose.
+//   LIMIT      — match what's marketable; rest residual at limit price.
+//   POST_ONLY  — reject if marketable; otherwise rest. (Maker intent.)
+//   IOC        — match what's marketable; cancel residual (no rest).
+// Real exchanges encode this as a TIF + flag combo (NASDAQ POST, ARCA ALO,
+// CME PostOnly, etc.). We collapse the relevant axis into one enum.
+enum class OrderType { LIMIT, POST_ONLY, IOC };
+
 struct Order {
     uint64_t order_id;
     Side side;

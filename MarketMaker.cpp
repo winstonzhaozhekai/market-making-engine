@@ -127,7 +127,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
 
     uint64_t bid_id = generate_order_id();
     Order bid_order(bid_id, Side::BUY, decision.bid_price, bid_size, md.timestamp);
-    if (simulator.submit_order(bid_order) == OrderStatus::ACKNOWLEDGED) {
+    if (simulator.submit_order(bid_order, OrderType::POST_ONLY) == OrderStatus::ACKNOWLEDGED) {
         bid_order.status = OrderStatus::ACKNOWLEDGED;
         active_orders.emplace(bid_id, bid_order);
         risk_manager_.record_quote(md.timestamp);
@@ -135,7 +135,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
 
     uint64_t ask_id = generate_order_id();
     Order ask_order(ask_id, Side::SELL, decision.ask_price, ask_size, md.timestamp);
-    if (simulator.submit_order(ask_order) == OrderStatus::ACKNOWLEDGED) {
+    if (simulator.submit_order(ask_order, OrderType::POST_ONLY) == OrderStatus::ACKNOWLEDGED) {
         ask_order.status = OrderStatus::ACKNOWLEDGED;
         active_orders.emplace(ask_id, ask_order);
         risk_manager_.record_quote(md.timestamp);

@@ -195,19 +195,31 @@ void MarketSimulator::simulate_trade_activity(std::vector<Trade>& trades, std::v
                 ts
             });
 
-            auto fills = matching_engine.match_incoming_order(
-                aggressor_side, trade_price, trade_size, trade_id, ts);
+            // Aggressor flows through the same add_order entry-point as any
+            // other order — with IOC semantics, residual is discarded
+            // rather than rested (matches the "random market sweep"
+            // intent and unifies the engine API around one path).
+            Order aggressor(kTradeIdTag | trade_id, aggressor_side,
+                            trade_price, trade_size, ts);
+            auto fills = matching_engine.add_order(
+                std::move(aggressor), OrderType::IOC, trade_id).fills;
             mm_fills.insert(mm_fills.end(), fills.begin(), fills.end());
         }
     }
 }
 
-OrderStatus MarketSimulator::submit_order(const Order& order) {
-    return matching_engine.add_order(order);
+OrderStatus MarketSimulator::submit_order(const Order& order, OrderType type) {
+    return matching_engine.add_order(order, type).status;
 }
 
 bool MarketSimulator::cancel_order(uint64_t order_id) {
     return matching_engine.cancel_order(order_id);
+}
+
+bool MarketSimulator::amend_order(uint64_t order_id, Ticks new_price,
+                                  int new_qty,
+                                  std::chrono::system_clock::time_point ts) {
+    return matching_engine.amend_order(order_id, new_price, new_qty, ts);
 }
 
 void MarketSimulator::update_order_book() {
