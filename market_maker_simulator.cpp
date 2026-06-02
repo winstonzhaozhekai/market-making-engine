@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include "MarketSimulator.h"
 #include "MarketMaker.h"
+#include "include/Logger.h"
 #include "include/SimulationConfig.h"
 #include "include/HeuristicStrategy.h"
 #include "strategies/AvellanedaStoikovStrategy.h"
@@ -193,7 +194,8 @@ int main(int argc, char* argv[]) {
         }
         RiskConfig risk_cfg;
         const Instrument instrument = simulator.instrument_meta();
-        MarketMaker mm(instrument, risk_cfg, std::move(strategy));
+        MarketMaker mm(instrument, risk_cfg, std::move(strategy),
+                       std::make_unique<StdoutLogger>());
 
         // Optional binary logger
         std::unique_ptr<BinaryLogger> bin_logger;

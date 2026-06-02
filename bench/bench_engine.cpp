@@ -4,21 +4,15 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
-#include <streambuf>
 #include <string>
 #include "MarketSimulator.h"
 #include "MarketMaker.h"
+#include "include/Logger.h"
 #include "include/SimulationConfig.h"
 #include "include/HeuristicStrategy.h"
 #include "include/Strategy.h"
 #include "strategies/AvellanedaStoikovStrategy.h"
 #include "PerformanceModule.h"
-
-namespace {
-struct NullBuf : std::streambuf {
-    int overflow(int c) override { return c; }
-};
-}
 
 int main(int argc, char* argv[]) {
     int events = 10000;
@@ -62,18 +56,14 @@ int main(int argc, char* argv[]) {
 
     MarketSimulator simulator(config);
     RiskConfig risk_cfg;
-    MarketMaker mm(simulator.instrument_meta(), risk_cfg, std::move(strategy));
+    MarketMaker mm(simulator.instrument_meta(), risk_cfg, std::move(strategy),
+                   std::make_unique<NullLogger>());
 
     PerformanceModule perf(static_cast<size_t>(events));
 
     std::cout << "Strategy: " << strategy_name
               << ", events: " << events
               << ", seed: " << seed << "\n";
-
-    // Silence MarketMaker hot-path prints (FILL/WARNING) inside the timed loop
-    // so they don't inflate latency samples or pollute throughput.
-    NullBuf null_buf;
-    std::streambuf* prev_buf = std::cout.rdbuf(&null_buf);
 
     auto wall_start = std::chrono::steady_clock::now();
     int processed = 0;
@@ -97,8 +87,6 @@ int main(int argc, char* argv[]) {
 
     auto wall_end = std::chrono::steady_clock::now();
     perf.set_wall_time(wall_end - wall_start);
-
-    std::cout.rdbuf(prev_buf);
 
     std::cout << "Benchmark complete: " << processed << " events processed\n";
     auto wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(wall_end - wall_start).count();

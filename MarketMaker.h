@@ -5,6 +5,7 @@
 #include "Order.h"
 #include "include/Accounting.h"
 #include "include/Instrument.h"
+#include "include/Logger.h"
 #include "include/RiskManager.h"
 #include "include/Strategy.h"
 #include <unordered_map>
@@ -20,6 +21,9 @@ public:
     explicit MarketMaker(Instrument instrument = Instrument{});
     MarketMaker(Instrument instrument, const RiskConfig& cfg);
     MarketMaker(Instrument instrument, const RiskConfig& cfg, std::unique_ptr<Strategy> strategy);
+    MarketMaker(Instrument instrument, const RiskConfig& cfg,
+                std::unique_ptr<Strategy> strategy,
+                std::unique_ptr<Logger> logger);
     void on_market_data(const MarketDataEvent& md, MarketSimulator& simulator);
     void report();
     double get_cash() const;
@@ -50,6 +54,7 @@ private:
     Accounting accounting_;
     RiskManager risk_manager_;
     std::unique_ptr<Strategy> strategy_;
+    std::unique_ptr<Logger> logger_;
     int64_t last_processed_sequence = 0;
     uint64_t order_counter = 0;
     int total_fills = 0;

@@ -14,30 +14,40 @@ MarketMaker::MarketMaker(Instrument instrument)
     : instrument_(instrument),
       accounting_(instrument, kInitialCapital),
       risk_manager_(instrument, RiskConfig{}),
-      strategy_(std::make_unique<HeuristicStrategy>()) {}
+      strategy_(std::make_unique<HeuristicStrategy>()),
+      logger_(std::make_unique<NullLogger>()) {}
 
 MarketMaker::MarketMaker(Instrument instrument, const RiskConfig& cfg)
     : instrument_(instrument),
       accounting_(instrument, kInitialCapital),
       risk_manager_(instrument, cfg),
-      strategy_(std::make_unique<HeuristicStrategy>()) {}
+      strategy_(std::make_unique<HeuristicStrategy>()),
+      logger_(std::make_unique<NullLogger>()) {}
 
 MarketMaker::MarketMaker(Instrument instrument, const RiskConfig& cfg, std::unique_ptr<Strategy> strategy)
     : instrument_(instrument),
       accounting_(instrument, kInitialCapital),
       risk_manager_(instrument, cfg),
-      strategy_(std::move(strategy)) {}
+      strategy_(std::move(strategy)),
+      logger_(std::make_unique<NullLogger>()) {}
+
+MarketMaker::MarketMaker(Instrument instrument, const RiskConfig& cfg,
+                         std::unique_ptr<Strategy> strategy,
+                         std::unique_ptr<Logger> logger)
+    : instrument_(instrument),
+      accounting_(instrument, kInitialCapital),
+      risk_manager_(instrument, cfg),
+      strategy_(std::move(strategy)),
+      logger_(logger ? std::move(logger) : std::make_unique<NullLogger>()) {}
 
 void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& simulator) {
     if (md.sequence_number != last_processed_sequence + 1 && last_processed_sequence != 0) {
-        std::cout << "WARNING: Sequence gap detected. Missed "
-                  << (md.sequence_number - last_processed_sequence - 1)
-                  << " events\n";
+        logger_->on_sequence_gap(md.sequence_number - last_processed_sequence - 1);
     }
     last_processed_sequence = md.sequence_number;
 
     if (md.bid_levels.empty() || md.ask_levels.empty()) {
-        std::cout << "WARNING: Empty order book detected, skipping quote update\n";
+        logger_->on_empty_book();
         return;
     }
 
@@ -78,13 +88,8 @@ void MarketMaker::on_fill(const FillEvent& fill) {
         }
     }
 
-    std::cout << "FILL: " << (fill.side == Side::BUY ? "BUY" : "SELL")
-              << " " << fill.fill_qty << " @ " << std::fixed << std::setprecision(4)
-              << instrument_.to_price(fill.price) << " (leaves=" << fill.leaves_qty
-              << ") pos=" << accounting_.position()
-              << " cash=" << std::setprecision(2) << accounting_.cash()
-              << " realized=" << accounting_.realized_pnl()
-              << " unrealized=" << accounting_.unrealized_pnl() << "\n";
+    logger_->on_fill(fill, instrument_, accounting_.position(), accounting_.cash(),
+                     accounting_.realized_pnl(), accounting_.unrealized_pnl());
 }
 
 void MarketMaker::cancel_all_orders(MarketSimulator& simulator, std::chrono::system_clock::time_point now) {
