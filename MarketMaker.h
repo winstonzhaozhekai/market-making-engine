@@ -8,11 +8,12 @@
 #include "include/Logger.h"
 #include "include/RiskManager.h"
 #include "include/Strategy.h"
-#include <unordered_map>
-#include <vector>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <vector>
 
 class MarketSimulator;
 
@@ -47,7 +48,13 @@ public:
 
 private:
     Instrument instrument_;
-    std::unordered_map<uint64_t, Order> active_orders;
+    // At most one resting order per side. Indexed by side_index() (BUY=0,
+    // SELL=1). std::optional doubles as the "is-slot-populated" flag; no
+    // hash lookup, no bucket alloc.
+    static constexpr std::size_t side_index(Side s) {
+        return s == Side::BUY ? 0u : 1u;
+    }
+    std::array<std::optional<Order>, 2> active_orders;
     Ticks last_bid_price_ = 0;
     Ticks last_ask_price_ = 0;
     bool has_last_event_ = false;

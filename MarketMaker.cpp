@@ -52,7 +52,8 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
     }
 
     for (const auto& fill : md.mm_fills) {
-        if (active_orders.count(fill.order_id)) {
+        auto& slot = active_orders[side_index(fill.side)];
+        if (slot && slot->order_id == fill.order_id) {
             on_fill(fill);
         }
     }
@@ -78,13 +79,13 @@ void MarketMaker::on_fill(const FillEvent& fill) {
 
     accounting_.on_fill(fill.side, fill.price, fill.fill_qty, /*is_maker=*/true);
 
-    auto it = active_orders.find(fill.order_id);
-    if (it != active_orders.end()) {
+    auto& slot = active_orders[side_index(fill.side)];
+    if (slot && slot->order_id == fill.order_id) {
         if (fill.leaves_qty == 0) {
-            active_orders.erase(it);
+            slot.reset();
         } else {
-            it->second.leaves_qty = fill.leaves_qty;
-            it->second.status = OrderStatus::PARTIALLY_FILLED;
+            slot->leaves_qty = fill.leaves_qty;
+            slot->status = OrderStatus::PARTIALLY_FILLED;
         }
     }
 
@@ -93,10 +94,12 @@ void MarketMaker::on_fill(const FillEvent& fill) {
 }
 
 void MarketMaker::cancel_all_orders(MarketSimulator& simulator, std::chrono::system_clock::time_point now) {
-    for (auto it = active_orders.begin(); it != active_orders.end(); ) {
-        risk_manager_.record_cancel(now);
-        simulator.cancel_order(it->first);
-        it = active_orders.erase(it);
+    for (auto& slot : active_orders) {
+        if (slot) {
+            risk_manager_.record_cancel(now);
+            simulator.cancel_order(slot->order_id);
+            slot.reset();
+        }
     }
 }
 
@@ -134,7 +137,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     Order bid_order(bid_id, Side::BUY, decision.bid_price, bid_size, md.timestamp);
     if (simulator.submit_order(bid_order, OrderType::POST_ONLY) == OrderStatus::ACKNOWLEDGED) {
         bid_order.status = OrderStatus::ACKNOWLEDGED;
-        active_orders.emplace(bid_id, bid_order);
+        active_orders[side_index(Side::BUY)] = bid_order;
         risk_manager_.record_quote(md.timestamp);
     }
 
@@ -142,7 +145,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     Order ask_order(ask_id, Side::SELL, decision.ask_price, ask_size, md.timestamp);
     if (simulator.submit_order(ask_order, OrderType::POST_ONLY) == OrderStatus::ACKNOWLEDGED) {
         ask_order.status = OrderStatus::ACKNOWLEDGED;
-        active_orders.emplace(ask_id, ask_order);
+        active_orders[side_index(Side::SELL)] = ask_order;
         risk_manager_.record_quote(md.timestamp);
     }
 }
@@ -194,7 +197,8 @@ void MarketMaker::report() {
     std::cout << "Drawdown: $" << risk_manager_.current_drawdown() << std::endl;
     std::cout << "High Water Mark: $" << risk_manager_.high_water_mark() << std::endl;
     std::cout << "Total Fills: " << total_fills << std::endl;
-    std::cout << "Active Orders: " << active_orders.size() << std::endl;
+    int active_count = (active_orders[0] ? 1 : 0) + (active_orders[1] ? 1 : 0);
+    std::cout << "Active Orders: " << active_count << std::endl;
     std::cout << "Strategy: " << strategy_->name() << std::endl;
     std::cout << "Inventory Skew: " << skew << std::endl;
     std::cout << "============================" << std::endl;
