@@ -4,6 +4,7 @@
 #include "../MarketDataEvent.h"
 #include <deque>
 #include <cmath>
+#include <span>
 #include <vector>
 
 class RollingVolatility {
@@ -52,7 +53,7 @@ class RollingOFI {
 public:
     explicit RollingOFI(size_t window = 50) : window_(window) {}
 
-    void on_trades(const std::vector<Trade>& trades) {
+    void on_trades(std::span<const Trade> trades) {
         for (const auto& t : trades) {
             double signed_vol = (t.aggressor_side == Side::BUY) ?
                 static_cast<double>(t.size) : -static_cast<double>(t.size);

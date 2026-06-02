@@ -21,19 +21,35 @@ time_point base_time() {
     return std::chrono::system_clock::from_time_t(1000000);
 }
 
-StrategySnapshot make_snap(double mid, int position = 0, int max_pos = 1000) {
-    StrategySnapshot snap;
-    snap.best_bid = T(mid - 0.05);
-    snap.best_ask = T(mid + 0.05);
-    snap.mid_price = mid;
-    snap.bid_levels.emplace_back(T(mid - 0.05), 100, 1ULL, base_time());
-    snap.ask_levels.emplace_back(T(mid + 0.05), 100, 2ULL, base_time());
-    snap.position = position;
-    snap.max_position = max_pos;
-    snap.tick_size = kIns.tick_size;
-    snap.timestamp = base_time();
-    snap.sequence_number = 1;
-    return snap;
+// Bundle owns the backing vectors so the snapshot's spans stay valid for the
+// strategy call. view() rebinds spans against the (possibly grown) buffers.
+struct SnapBundle {
+    std::vector<OrderLevel> bid_levels;
+    std::vector<OrderLevel> ask_levels;
+    std::vector<Trade>      trades;
+    StrategySnapshot        snap;
+
+    const StrategySnapshot& view() {
+        snap.bid_levels = bid_levels;
+        snap.ask_levels = ask_levels;
+        snap.trades     = trades;
+        return snap;
+    }
+};
+
+SnapBundle make_snap(double mid, int position = 0, int max_pos = 1000) {
+    SnapBundle b;
+    b.snap.best_bid = T(mid - 0.05);
+    b.snap.best_ask = T(mid + 0.05);
+    b.snap.mid_price = mid;
+    b.bid_levels.emplace_back(T(mid - 0.05), 100, 1ULL, base_time());
+    b.ask_levels.emplace_back(T(mid + 0.05), 100, 2ULL, base_time());
+    b.snap.position = position;
+    b.snap.max_position = max_pos;
+    b.snap.tick_size = kIns.tick_size;
+    b.snap.timestamp = base_time();
+    b.snap.sequence_number = 1;
+    return b;
 }
 
 Trade make_trade(Side side, double price, int size) {
@@ -110,7 +126,7 @@ TEST(StrategyBehavior, heuristic_output_matches_old_logic) {
     HeuristicStrategy strat;
     auto snap = make_snap(100.0, 0, 1000);
 
-    QuoteDecision d = strat.compute_quotes(snap);
+    QuoteDecision d = strat.compute_quotes(snap.view());
     EXPECT_NEAR(D(d.bid_price), 100.0 - 0.01, 1e-4);
     EXPECT_NEAR(D(d.ask_price), 100.0 + 0.01, 1e-4);
     EXPECT_TRUE(d.should_quote);
@@ -122,12 +138,12 @@ TEST(StrategyBehavior, heuristic_skew_direction) {
     // the direction survives the tick-grid snap.
     HeuristicStrategy strat;
     auto snap_long = make_snap(100.0, 15, 1000);
-    QuoteDecision d_long = strat.compute_quotes(snap_long);
+    QuoteDecision d_long = strat.compute_quotes(snap_long.view());
     EXPECT_LT(D(d_long.bid_price), 100.0 - 0.01);
     EXPECT_LT(D(d_long.ask_price), 100.0 + 0.01);
 
     auto snap_short = make_snap(100.0, -15, 1000);
-    QuoteDecision d_short = strat.compute_quotes(snap_short);
+    QuoteDecision d_short = strat.compute_quotes(snap_short.view());
     EXPECT_GT(D(d_short.bid_price), 100.0 - 0.01);
     EXPECT_GT(D(d_short.ask_price), 100.0 + 0.01);
 }
@@ -143,12 +159,12 @@ TEST(StrategyBehavior, as_determinism) {
 
     auto snap = make_snap(100.0, 0, 1000);
     for (int i = 0; i < 5; ++i) {
-        snap.mid_price = 100.0 + i * 0.01;
-        snap.best_bid = T(snap.mid_price - 0.05);
-        snap.best_ask = T(snap.mid_price + 0.05);
+        snap.snap.mid_price = 100.0 + i * 0.01;
+        snap.snap.best_bid = T(snap.snap.mid_price - 0.05);
+        snap.snap.best_ask = T(snap.snap.mid_price + 0.05);
     }
-    QuoteDecision d1 = s1.compute_quotes(snap);
-    QuoteDecision d2 = s2.compute_quotes(snap);
+    QuoteDecision d1 = s1.compute_quotes(snap.view());
+    QuoteDecision d2 = s2.compute_quotes(snap.view());
     EXPECT_EQ(d1.bid_price, d2.bid_price);
     EXPECT_EQ(d1.ask_price, d2.ask_price);
     EXPECT_EQ(d1.bid_size, d2.bid_size);
@@ -169,14 +185,14 @@ TEST(StrategyBehavior, as_reservation_shifts_down_when_long) {
         double mid = 100.0 + (i % 2 == 0 ? 0.0 : 0.1);
         auto snap_f = make_snap(mid, 0, 1000);
         auto snap_l = make_snap(mid, 50, 1000);
-        s_flat.compute_quotes(snap_f);
-        s_long.compute_quotes(snap_l);
+        s_flat.compute_quotes(snap_f.view());
+        s_long.compute_quotes(snap_l.view());
     }
 
     auto snap_f = make_snap(100.0, 0, 1000);
     auto snap_l = make_snap(100.0, 50, 1000);
-    QuoteDecision d_flat = s_flat.compute_quotes(snap_f);
-    QuoteDecision d_long = s_long.compute_quotes(snap_l);
+    QuoteDecision d_flat = s_flat.compute_quotes(snap_f.view());
+    QuoteDecision d_long = s_long.compute_quotes(snap_l.view());
 
     double mid_flat = (D(d_flat.bid_price) + D(d_flat.ask_price)) / 2.0;
     double mid_long = (D(d_long.bid_price) + D(d_long.ask_price)) / 2.0;
@@ -196,14 +212,14 @@ TEST(StrategyBehavior, as_reservation_shifts_up_when_short) {
         double mid = 100.0 + (i % 2 == 0 ? 0.0 : 0.1);
         auto snap_f = make_snap(mid, 0, 1000);
         auto snap_s = make_snap(mid, -50, 1000);
-        s_flat.compute_quotes(snap_f);
-        s_short.compute_quotes(snap_s);
+        s_flat.compute_quotes(snap_f.view());
+        s_short.compute_quotes(snap_s.view());
     }
 
     auto snap_f = make_snap(100.0, 0, 1000);
     auto snap_s = make_snap(100.0, -50, 1000);
-    QuoteDecision d_flat = s_flat.compute_quotes(snap_f);
-    QuoteDecision d_short = s_short.compute_quotes(snap_s);
+    QuoteDecision d_flat = s_flat.compute_quotes(snap_f.view());
+    QuoteDecision d_short = s_short.compute_quotes(snap_s.view());
 
     double mid_flat = (D(d_flat.bid_price) + D(d_flat.ask_price)) / 2.0;
     double mid_short = (D(d_short.bid_price) + D(d_short.ask_price)) / 2.0;
@@ -221,18 +237,18 @@ TEST(StrategyBehavior, as_spread_widens_with_high_vol) {
 
     for (int i = 0; i < 10; ++i) {
         auto snap = make_snap(100.0, 0, 1000);
-        s_low.compute_quotes(snap);
+        s_low.compute_quotes(snap.view());
     }
 
     for (int i = 0; i < 10; ++i) {
         double mid = 100.0 + (i % 2 == 0 ? -2.0 : 2.0);
         auto snap = make_snap(mid, 0, 1000);
-        s_high.compute_quotes(snap);
+        s_high.compute_quotes(snap.view());
     }
 
     auto snap = make_snap(100.0, 0, 1000);
-    QuoteDecision d_low = s_low.compute_quotes(snap);
-    QuoteDecision d_high = s_high.compute_quotes(snap);
+    QuoteDecision d_low = s_low.compute_quotes(snap.view());
+    QuoteDecision d_high = s_high.compute_quotes(snap.view());
 
     double spread_low = D(d_low.ask_price - d_low.bid_price);
     double spread_high = D(d_high.ask_price - d_high.bid_price);
@@ -248,10 +264,10 @@ TEST(StrategyBehavior, as_spread_tightens_with_low_vol) {
 
     for (int i = 0; i < 10; ++i) {
         auto snap = make_snap(100.0, 0, 1000);
-        strat.compute_quotes(snap);
+        strat.compute_quotes(snap.view());
     }
     auto snap = make_snap(100.0, 0, 1000);
-    QuoteDecision d = strat.compute_quotes(snap);
+    QuoteDecision d = strat.compute_quotes(snap.view());
     double spread = D(d.ask_price - d.bid_price);
     double min_spread = 200.0 * 100.0 / 10000.0;
     EXPECT_NEAR(spread, min_spread, 0.01);
@@ -265,10 +281,10 @@ TEST(StrategyBehavior, as_min_floor_enforced) {
 
     for (int i = 0; i < 10; ++i) {
         auto snap = make_snap(100.0, 0, 1000);
-        strat.compute_quotes(snap);
+        strat.compute_quotes(snap.view());
     }
     auto snap = make_snap(100.0, 0, 1000);
-    QuoteDecision d = strat.compute_quotes(snap);
+    QuoteDecision d = strat.compute_quotes(snap.view());
     double spread = D(d.ask_price - d.bid_price);
     double min_spread = 50.0 * 100.0 / 10000.0;
     EXPECT_GE(spread, min_spread - EPS);
@@ -286,11 +302,11 @@ TEST(StrategyBehavior, as_long_ask_tighter) {
     for (int i = 0; i < 10; ++i) {
         double mid = 100.0 + (i % 2 == 0 ? 0.0 : 0.1);
         auto snap = make_snap(mid, 50, 1000);
-        strat.compute_quotes(snap);
+        strat.compute_quotes(snap.view());
     }
 
     auto snap = make_snap(100.0, 50, 1000);
-    QuoteDecision d = strat.compute_quotes(snap);
+    QuoteDecision d = strat.compute_quotes(snap.view());
     EXPECT_GT(d.ask_size, d.bid_size);
 }
 
@@ -302,11 +318,11 @@ TEST(StrategyBehavior, as_short_bid_tighter) {
     for (int i = 0; i < 10; ++i) {
         double mid = 100.0 + (i % 2 == 0 ? 0.0 : 0.1);
         auto snap = make_snap(mid, -50, 1000);
-        strat.compute_quotes(snap);
+        strat.compute_quotes(snap.view());
     }
 
     auto snap = make_snap(100.0, -50, 1000);
-    QuoteDecision d = strat.compute_quotes(snap);
+    QuoteDecision d = strat.compute_quotes(snap.view());
     EXPECT_GT(d.bid_size, d.ask_size);
 }
 
@@ -319,10 +335,10 @@ TEST(StrategyBehavior, as_max_inventory_max_asymmetry) {
 
     for (int i = 0; i < 10; ++i) {
         auto snap = make_snap(100.0 + i * 0.01, 1000, 1000);
-        strat.compute_quotes(snap);
+        strat.compute_quotes(snap.view());
     }
     auto snap = make_snap(100.0, 1000, 1000);
-    QuoteDecision d = strat.compute_quotes(snap);
+    QuoteDecision d = strat.compute_quotes(snap.view());
     EXPECT_EQ(d.bid_size, 1);
     EXPECT_EQ(d.ask_size, 20);
 }
@@ -346,15 +362,15 @@ TEST(StrategyBehavior, as_high_ofi_widens_spread) {
         auto snap_no = make_snap(mid, 0, 1000);
         auto snap_ofi = make_snap(mid, 0, 1000);
         snap_ofi.trades.push_back(make_trade(Side::BUY, mid, 100));
-        s_no_ofi.compute_quotes(snap_no);
-        s_ofi.compute_quotes(snap_ofi);
+        s_no_ofi.compute_quotes(snap_no.view());
+        s_ofi.compute_quotes(snap_ofi.view());
     }
 
     auto snap_no = make_snap(100.0, 0, 1000);
     auto snap_ofi = make_snap(100.0, 0, 1000);
     snap_ofi.trades.push_back(make_trade(Side::BUY, 100.0, 100));
-    QuoteDecision d_no = s_no_ofi.compute_quotes(snap_no);
-    QuoteDecision d_ofi = s_ofi.compute_quotes(snap_ofi);
+    QuoteDecision d_no = s_no_ofi.compute_quotes(snap_no.view());
+    QuoteDecision d_ofi = s_ofi.compute_quotes(snap_ofi.view());
 
     double spread_no = D(d_no.ask_price - d_no.bid_price);
     double spread_ofi = D(d_ofi.ask_price - d_ofi.bid_price);
@@ -372,12 +388,12 @@ TEST(StrategyBehavior, as_pull_on_toxic_true) {
     for (int i = 0; i < 10; ++i) {
         auto snap = make_snap(100.0 + i * 0.01, 0, 1000);
         snap.trades.push_back(make_trade(Side::BUY, 100.0, 50));
-        strat.compute_quotes(snap);
+        strat.compute_quotes(snap.view());
     }
 
     auto snap = make_snap(100.0, 0, 1000);
     snap.trades.push_back(make_trade(Side::BUY, 100.0, 50));
-    QuoteDecision d = strat.compute_quotes(snap);
+    QuoteDecision d = strat.compute_quotes(snap.view());
     EXPECT_FALSE(d.should_quote);
 }
 
@@ -395,12 +411,12 @@ TEST(StrategyBehavior, as_pull_on_toxic_false_still_quotes_wider) {
     for (int i = 0; i < 10; ++i) {
         auto snap = make_snap(100.0 + i * 0.01, 0, 1000);
         snap.trades.push_back(make_trade(Side::BUY, 100.0, 50));
-        strat.compute_quotes(snap);
+        strat.compute_quotes(snap.view());
     }
 
     auto snap = make_snap(100.0, 0, 1000);
     snap.trades.push_back(make_trade(Side::BUY, 100.0, 50));
-    QuoteDecision d = strat.compute_quotes(snap);
+    QuoteDecision d = strat.compute_quotes(snap.view());
     EXPECT_TRUE(d.should_quote);
 }
 
@@ -424,7 +440,7 @@ TEST(StrategyBehavior, integration_200_snapshots) {
         } else if (i % 3 == 1) {
             snap.trades.push_back(make_trade(Side::SELL, mid, 10));
         }
-        last = strat.compute_quotes(snap);
+        last = strat.compute_quotes(snap.view());
     }
 
     EXPECT_TRUE(last.should_quote);
@@ -443,7 +459,7 @@ TEST(StrategyBehavior, integration_200_snapshots) {
         } else if (i % 3 == 1) {
             snap.trades.push_back(make_trade(Side::SELL, mid, 10));
         }
-        last2 = strat2.compute_quotes(snap);
+        last2 = strat2.compute_quotes(snap.view());
     }
 
     EXPECT_EQ(last.bid_price, last2.bid_price);
