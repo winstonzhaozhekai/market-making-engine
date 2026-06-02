@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <vector>
+#include "include/Instrument.h"
 #include "include/Strategy.h"
 #include "include/RollingEstimators.h"
 #include "include/HeuristicStrategy.h"
@@ -10,6 +11,9 @@
 namespace {
 
 constexpr double EPS = 1e-6;
+const Instrument kIns{0.01};
+Ticks T(double dollars) { return kIns.to_ticks(dollars); }
+double D(Ticks t) { return kIns.to_price(t); }
 
 using time_point = std::chrono::system_clock::time_point;
 
@@ -19,13 +23,14 @@ time_point base_time() {
 
 StrategySnapshot make_snap(double mid, int position = 0, int max_pos = 1000) {
     StrategySnapshot snap;
-    snap.best_bid = mid - 0.05;
-    snap.best_ask = mid + 0.05;
+    snap.best_bid = T(mid - 0.05);
+    snap.best_ask = T(mid + 0.05);
     snap.mid_price = mid;
-    snap.bid_levels.emplace_back(mid - 0.05, 100, 1ULL, base_time());
-    snap.ask_levels.emplace_back(mid + 0.05, 100, 2ULL, base_time());
+    snap.bid_levels.emplace_back(T(mid - 0.05), 100, 1ULL, base_time());
+    snap.ask_levels.emplace_back(T(mid + 0.05), 100, 2ULL, base_time());
     snap.position = position;
     snap.max_position = max_pos;
+    snap.tick_size = kIns.tick_size;
     snap.timestamp = base_time();
     snap.sequence_number = 1;
     return snap;
@@ -34,7 +39,7 @@ StrategySnapshot make_snap(double mid, int position = 0, int max_pos = 1000) {
 Trade make_trade(Side side, double price, int size) {
     Trade t;
     t.aggressor_side = side;
-    t.price = price;
+    t.price = T(price);
     t.size = size;
     t.trade_id = 100;
     t.timestamp = base_time();
@@ -106,22 +111,25 @@ TEST(StrategyBehavior, heuristic_output_matches_old_logic) {
     auto snap = make_snap(100.0, 0, 1000);
 
     QuoteDecision d = strat.compute_quotes(snap);
-    EXPECT_NEAR(d.bid_price, 100.0 - 0.01, 1e-4);
-    EXPECT_NEAR(d.ask_price, 100.0 + 0.01, 1e-4);
+    EXPECT_NEAR(D(d.bid_price), 100.0 - 0.01, 1e-4);
+    EXPECT_NEAR(D(d.ask_price), 100.0 + 0.01, 1e-4);
     EXPECT_TRUE(d.should_quote);
 }
 
 TEST(StrategyBehavior, heuristic_skew_direction) {
+    // skew_factor=0.001 with |position|=15 gives a skew of ±0.015 (clamped to
+    // ±0.01) — more than one full tick away from the flat-position quote, so
+    // the direction survives the tick-grid snap.
     HeuristicStrategy strat;
-    auto snap_long = make_snap(100.0, 5, 1000);
+    auto snap_long = make_snap(100.0, 15, 1000);
     QuoteDecision d_long = strat.compute_quotes(snap_long);
-    EXPECT_LT(d_long.bid_price, 100.0 - 0.01);
-    EXPECT_LT(d_long.ask_price, 100.0 + 0.01);
+    EXPECT_LT(D(d_long.bid_price), 100.0 - 0.01);
+    EXPECT_LT(D(d_long.ask_price), 100.0 + 0.01);
 
-    auto snap_short = make_snap(100.0, -5, 1000);
+    auto snap_short = make_snap(100.0, -15, 1000);
     QuoteDecision d_short = strat.compute_quotes(snap_short);
-    EXPECT_GT(d_short.bid_price, 100.0 - 0.01);
-    EXPECT_GT(d_short.ask_price, 100.0 + 0.01);
+    EXPECT_GT(D(d_short.bid_price), 100.0 - 0.01);
+    EXPECT_GT(D(d_short.ask_price), 100.0 + 0.01);
 }
 
 // ============================================================
@@ -136,8 +144,8 @@ TEST(StrategyBehavior, as_determinism) {
     auto snap = make_snap(100.0, 0, 1000);
     for (int i = 0; i < 5; ++i) {
         snap.mid_price = 100.0 + i * 0.01;
-        snap.best_bid = snap.mid_price - 0.05;
-        snap.best_ask = snap.mid_price + 0.05;
+        snap.best_bid = T(snap.mid_price - 0.05);
+        snap.best_ask = T(snap.mid_price + 0.05);
     }
     QuoteDecision d1 = s1.compute_quotes(snap);
     QuoteDecision d2 = s2.compute_quotes(snap);
@@ -148,8 +156,12 @@ TEST(StrategyBehavior, as_determinism) {
 }
 
 TEST(StrategyBehavior, as_reservation_shifts_down_when_long) {
+    // Default gamma is small enough that q*gamma*sigma^2*T sits below one tick
+    // for moderate positions and the snap erases the direction. Bump gamma so
+    // the reservation shift comfortably clears the tick grid.
     AvellanedaStoikovConfig cfg;
     cfg.vol_window = 5;
+    cfg.gamma = 10000.0;
     AvellanedaStoikovStrategy s_flat(cfg);
     AvellanedaStoikovStrategy s_long(cfg);
 
@@ -166,14 +178,17 @@ TEST(StrategyBehavior, as_reservation_shifts_down_when_long) {
     QuoteDecision d_flat = s_flat.compute_quotes(snap_f);
     QuoteDecision d_long = s_long.compute_quotes(snap_l);
 
-    double mid_flat = (d_flat.bid_price + d_flat.ask_price) / 2.0;
-    double mid_long = (d_long.bid_price + d_long.ask_price) / 2.0;
+    double mid_flat = (D(d_flat.bid_price) + D(d_flat.ask_price)) / 2.0;
+    double mid_long = (D(d_long.bid_price) + D(d_long.ask_price)) / 2.0;
     EXPECT_LT(mid_long, mid_flat);
 }
 
 TEST(StrategyBehavior, as_reservation_shifts_up_when_short) {
+    // See note in as_reservation_shifts_down_when_long — bump gamma so the
+    // reservation shift exceeds tick granularity.
     AvellanedaStoikovConfig cfg;
     cfg.vol_window = 5;
+    cfg.gamma = 10000.0;
     AvellanedaStoikovStrategy s_flat(cfg);
     AvellanedaStoikovStrategy s_short(cfg);
 
@@ -190,8 +205,8 @@ TEST(StrategyBehavior, as_reservation_shifts_up_when_short) {
     QuoteDecision d_flat = s_flat.compute_quotes(snap_f);
     QuoteDecision d_short = s_short.compute_quotes(snap_s);
 
-    double mid_flat = (d_flat.bid_price + d_flat.ask_price) / 2.0;
-    double mid_short = (d_short.bid_price + d_short.ask_price) / 2.0;
+    double mid_flat = (D(d_flat.bid_price) + D(d_flat.ask_price)) / 2.0;
+    double mid_short = (D(d_short.bid_price) + D(d_short.ask_price)) / 2.0;
     EXPECT_GT(mid_short, mid_flat);
 }
 
@@ -219,8 +234,8 @@ TEST(StrategyBehavior, as_spread_widens_with_high_vol) {
     QuoteDecision d_low = s_low.compute_quotes(snap);
     QuoteDecision d_high = s_high.compute_quotes(snap);
 
-    double spread_low = d_low.ask_price - d_low.bid_price;
-    double spread_high = d_high.ask_price - d_high.bid_price;
+    double spread_low = D(d_low.ask_price - d_low.bid_price);
+    double spread_high = D(d_high.ask_price - d_high.bid_price);
     EXPECT_GT(spread_high, spread_low);
 }
 
@@ -237,7 +252,7 @@ TEST(StrategyBehavior, as_spread_tightens_with_low_vol) {
     }
     auto snap = make_snap(100.0, 0, 1000);
     QuoteDecision d = strat.compute_quotes(snap);
-    double spread = d.ask_price - d.bid_price;
+    double spread = D(d.ask_price - d.bid_price);
     double min_spread = 200.0 * 100.0 / 10000.0;
     EXPECT_NEAR(spread, min_spread, 0.01);
 }
@@ -254,7 +269,7 @@ TEST(StrategyBehavior, as_min_floor_enforced) {
     }
     auto snap = make_snap(100.0, 0, 1000);
     QuoteDecision d = strat.compute_quotes(snap);
-    double spread = d.ask_price - d.bid_price;
+    double spread = D(d.ask_price - d.bid_price);
     double min_spread = 50.0 * 100.0 / 10000.0;
     EXPECT_GE(spread, min_spread - EPS);
 }
@@ -341,8 +356,8 @@ TEST(StrategyBehavior, as_high_ofi_widens_spread) {
     QuoteDecision d_no = s_no_ofi.compute_quotes(snap_no);
     QuoteDecision d_ofi = s_ofi.compute_quotes(snap_ofi);
 
-    double spread_no = d_no.ask_price - d_no.bid_price;
-    double spread_ofi = d_ofi.ask_price - d_ofi.bid_price;
+    double spread_no = D(d_no.ask_price - d_no.bid_price);
+    double spread_ofi = D(d_ofi.ask_price - d_ofi.bid_price);
     EXPECT_GT(spread_ofi, spread_no);
 }
 
@@ -413,7 +428,7 @@ TEST(StrategyBehavior, integration_200_snapshots) {
     }
 
     EXPECT_TRUE(last.should_quote);
-    EXPECT_GT(last.bid_price, 0.0);
+    EXPECT_GT(last.bid_price, Ticks{0});
     EXPECT_GT(last.ask_price, last.bid_price);
     EXPECT_GE(last.bid_size, 1);
     EXPECT_GE(last.ask_size, 1);

@@ -2,6 +2,7 @@
 #define MATCHING_ENGINE_H
 
 #include "Order.h"
+#include "include/Instrument.h"
 #include <cstdint>
 #include <vector>
 
@@ -9,7 +10,7 @@ class MatchingEngine {
 public:
     OrderStatus add_order(Order order);
     bool cancel_order(uint64_t order_id);
-    std::vector<FillEvent> match_incoming_order(Side aggressor_side, double price, int qty,
+    std::vector<FillEvent> match_incoming_order(Side aggressor_side, Ticks price, int qty,
                                                  uint64_t trade_id,
                                                  std::chrono::system_clock::time_point timestamp);
 

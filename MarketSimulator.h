@@ -9,6 +9,7 @@
 #include <vector>
 #include "MarketDataEvent.h"
 #include "MatchingEngine.h"
+#include "include/Instrument.h"
 #include "include/SimulationConfig.h"
 
 class MarketSimulator {
@@ -17,16 +18,18 @@ public:
     explicit MarketSimulator(const SimulationConfig& config);
     MarketDataEvent generate_event();
 
-    // MM order submission interface
     OrderStatus submit_order(const Order& order);
     bool cancel_order(uint64_t order_id);
     const MatchingEngine& get_matching_engine() const { return matching_engine; }
+    const Instrument& instrument_meta() const { return instrument_; }
 
 private:
     SimulationConfig config;
+    Instrument instrument_;
     std::string instrument;
-    double mid_price;
-    double spread;
+    // Sub-tick random walk lives in dollars; emitted prices snap to ticks.
+    double mid_price_dollars;
+    double spread_dollars;
     double volatility;
     int latency_ms;
     std::vector<OrderLevel> bid_levels_;
@@ -40,7 +43,6 @@ private:
     std::vector<MarketDataEvent> replay_events;
     std::size_t replay_index;
 
-    // Pre-allocated vectors reused across events
     std::vector<Trade> trades_buf_;
     std::vector<FillEvent> mm_fills_buf_;
 
@@ -51,8 +53,8 @@ private:
     std::chrono::system_clock::time_point current_time();
     void maybe_write_event_log(const MarketDataEvent& event);
     bool load_event_log(const std::string& path);
-    static std::string serialize_event(const MarketDataEvent& event);
-    static MarketDataEvent deserialize_event(const std::string& line);
+    std::string serialize_event(const MarketDataEvent& event) const;
+    MarketDataEvent deserialize_event(const std::string& line) const;
 };
 
 #endif // MARKET_SIMULATOR_H

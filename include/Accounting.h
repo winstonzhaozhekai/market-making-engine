@@ -1,7 +1,8 @@
 #ifndef ACCOUNTING_H
 #define ACCOUNTING_H
 
-#include "Order.h"
+#include "Instrument.h"
+#include "../Order.h"
 #include <algorithm>
 #include <cmath>
 
@@ -13,63 +14,59 @@ struct FeeSchedule {
 
 class Accounting {
 public:
-    explicit Accounting(double initial_capital, FeeSchedule fees = {})
-        : initial_capital_(initial_capital), cash_(initial_capital), fees_(fees) {}
+    Accounting(Instrument instrument, double initial_capital, FeeSchedule fees = {})
+        : instrument_(instrument),
+          initial_capital_(initial_capital),
+          cash_(initial_capital),
+          fees_(fees) {}
 
-    void on_fill(Side side, double price, int qty, bool is_maker) {
+    // Convenience constructor for tests / call sites that don't yet thread an
+    // Instrument: defaults to tick_size = 0.01 (single-instrument design).
+    explicit Accounting(double initial_capital, FeeSchedule fees = {})
+        : Accounting(Instrument{}, initial_capital, fees) {}
+
+    void on_fill(Side side, Ticks fill_price, int qty, bool is_maker) {
+        double price = instrument_.to_price(fill_price);
         double notional = price * qty;
 
-        // Apply fees/rebates
         double fee = notional * (fees_.fee_bps / 10000.0);
         if (is_maker) {
             double rebate = fees_.maker_rebate_per_share * qty;
             total_rebates_ += rebate;
-            fee -= rebate;  // net fee after rebate
+            fee -= rebate;
         } else {
             fee += fees_.taker_fee_per_share * qty;
         }
         total_fees_ += fee;
 
         if (side == Side::BUY) {
-            // Buying: cash goes down, position goes up
             cash_ -= notional;
             if (position_ >= 0) {
-                // Adding to long or opening long: increase cost basis
                 cost_basis_ += notional;
             } else {
-                // Closing short (or flipping to long)
                 int close_qty = std::min(qty, -position_);
                 int open_qty = qty - close_qty;
                 double avg_entry = avg_entry_price();
-                // Realized PnL on closing short: sold high, buying back lower
                 realized_pnl_ += (avg_entry - price) * close_qty;
                 if (open_qty > 0) {
-                    // Flipped to long: reset cost basis for new long position
                     cost_basis_ = price * open_qty;
                 } else {
-                    // Partially or fully closed short
                     cost_basis_ -= avg_entry * close_qty;
                 }
             }
             position_ += qty;
         } else {
-            // Selling: cash goes up, position goes down
             cash_ += notional;
             if (position_ <= 0) {
-                // Adding to short or opening short: increase cost basis (absolute)
                 cost_basis_ += notional;
             } else {
-                // Closing long (or flipping to short)
                 int close_qty = std::min(qty, position_);
                 int open_qty = qty - close_qty;
                 double avg_entry = avg_entry_price();
-                // Realized PnL on closing long: bought low, selling higher
                 realized_pnl_ += (price - avg_entry) * close_qty;
                 if (open_qty > 0) {
-                    // Flipped to short: reset cost basis for new short position
                     cost_basis_ = price * open_qty;
                 } else {
-                    // Partially or fully closed long
                     cost_basis_ -= avg_entry * close_qty;
                 }
             }
@@ -102,7 +99,6 @@ public:
         }
     }
 
-    // Queries
     double realized_pnl() const { return realized_pnl_; }
     double unrealized_pnl() const { return unrealized_pnl_; }
     double total_pnl() const { return realized_pnl_ + unrealized_pnl_; }
@@ -136,6 +132,7 @@ public:
     }
 
 private:
+    Instrument instrument_;
     double initial_capital_;
     double cash_;
     int    position_ = 0;

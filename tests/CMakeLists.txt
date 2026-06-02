@@ -17,6 +17,7 @@ function(mme_add_test name)
     gtest_discover_tests(${name})
 endfunction()
 
+mme_add_test(test_tick_conversion)
 mme_add_test(test_accounting)
 mme_add_test(test_matching_engine     mme_core)
 mme_add_test(test_risk_manager        mme_core)

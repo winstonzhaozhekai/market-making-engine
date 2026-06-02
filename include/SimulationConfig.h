@@ -11,6 +11,7 @@ enum class SimulationMode {
 
 struct SimulationConfig {
     std::string instrument = "XYZ";
+    double tick_size = 0.01;
     double initial_price = 100.0;
     double spread = 0.1;
     double volatility = 0.5;

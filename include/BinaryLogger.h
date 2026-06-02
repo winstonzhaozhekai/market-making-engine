@@ -5,17 +5,20 @@
 #include <cstring>
 #include <fstream>
 #include <chrono>
+#include "Instrument.h"
 #include "../MarketDataEvent.h"
 
 class BinaryLogger {
 public:
-    explicit BinaryLogger(const std::string& path)
-        : out_(path, std::ios::binary | std::ios::trunc) {}
+    explicit BinaryLogger(const std::string& path, Instrument instrument = Instrument{})
+        : out_(path, std::ios::binary | std::ios::trunc), instrument_(instrument) {}
 
     bool is_open() const { return out_.is_open(); }
 
     void log_event(const MarketDataEvent& ev) {
         // Build record into buffer, then write total_len prefix + payload.
+        // Prices serialized as dollars (boundary representation) — the binary
+        // format will be redesigned in M6 alongside the SPSC ring buffer.
         buf_.clear();
 
         // Reserve space for total_len (filled in at the end)
@@ -25,8 +28,8 @@ public:
         int64_t ts_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             ev.timestamp.time_since_epoch()).count();
         append<int64_t>(ts_ns);
-        append<double>(ev.best_bid_price);
-        append<double>(ev.best_ask_price);
+        append<double>(instrument_.to_price(ev.best_bid_price));
+        append<double>(instrument_.to_price(ev.best_ask_price));
         append<int32_t>(ev.best_bid_size);
         append<int32_t>(ev.best_ask_size);
         append<uint16_t>(static_cast<uint16_t>(ev.trades.size()));
@@ -34,14 +37,14 @@ public:
 
         for (const auto& t : ev.trades) {
             append<uint8_t>(t.aggressor_side == Side::BUY ? 1 : 0);
-            append<double>(t.price);
+            append<double>(instrument_.to_price(t.price));
             append<int32_t>(t.size);
             append<uint64_t>(t.trade_id);
         }
 
         for (const auto& f : ev.partial_fills) {
             append<uint64_t>(f.order_id);
-            append<double>(f.price);
+            append<double>(instrument_.to_price(f.price));
             append<int32_t>(f.filled_size);
             append<int32_t>(f.remaining_size);
         }
@@ -57,6 +60,7 @@ public:
 
 private:
     std::ofstream out_;
+    Instrument instrument_;
     std::vector<char> buf_;
 
     template <typename T>

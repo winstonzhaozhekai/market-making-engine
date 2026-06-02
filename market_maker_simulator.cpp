@@ -192,12 +192,13 @@ int main(int argc, char* argv[]) {
             strategy = std::make_unique<HeuristicStrategy>();
         }
         RiskConfig risk_cfg;
-        MarketMaker mm(risk_cfg, std::move(strategy));
+        const Instrument instrument = simulator.instrument_meta();
+        MarketMaker mm(instrument, risk_cfg, std::move(strategy));
 
         // Optional binary logger
         std::unique_ptr<BinaryLogger> bin_logger;
         if (!binary_log_path.empty()) {
-            bin_logger = std::make_unique<BinaryLogger>(binary_log_path);
+            bin_logger = std::make_unique<BinaryLogger>(binary_log_path, instrument);
             if (!bin_logger->is_open()) {
                 std::cerr << "Failed to open binary log: " << binary_log_path << "\n";
                 return 1;
@@ -232,14 +233,16 @@ int main(int argc, char* argv[]) {
 
             ++processed;
             last_sequence = md.sequence_number;
-            sum_bid += md.best_bid_price;
-            sum_ask += md.best_ask_price;
+            const double bid_dollars = instrument.to_price(md.best_bid_price);
+            const double ask_dollars = instrument.to_price(md.best_ask_price);
+            sum_bid += bid_dollars;
+            sum_ask += ask_dollars;
 
             std::ostringstream event_fp;
             event_fp << md.sequence_number << "|"
                      << std::fixed << std::setprecision(6)
-                     << md.best_bid_price << "|"
-                     << md.best_ask_price << "|"
+                     << bid_dollars << "|"
+                     << ask_dollars << "|"
                      << md.best_bid_size << "|"
                      << md.best_ask_size;
 
@@ -247,12 +250,12 @@ int main(int argc, char* argv[]) {
                 total_trade_volume += trade.size;
                 event_fp << "|T:" << (trade.aggressor_side == Side::BUY ? "BUY" : "SELL")
                          << ":" << std::fixed << std::setprecision(6)
-                         << trade.price << ":" << trade.size;
+                         << instrument.to_price(trade.price) << ":" << trade.size;
             }
             for (const auto& fill : md.partial_fills) {
                 total_partial_fill_volume += fill.filled_size;
                 event_fp << "|F:" << fill.order_id << ":" << std::fixed << std::setprecision(6)
-                         << fill.price << ":" << fill.filled_size << ":" << fill.remaining_size;
+                         << instrument.to_price(fill.price) << ":" << fill.filled_size << ":" << fill.remaining_size;
             }
             for (const auto& fill : md.mm_fills) {
                 total_mm_fill_volume += fill.fill_qty;
@@ -262,8 +265,8 @@ int main(int argc, char* argv[]) {
 
             if (!config.quiet && (processed <= 5 || processed % 100 == 0)) {
                 std::cout << "Event " << md.sequence_number
-                          << " bid=" << std::fixed << std::setprecision(4) << md.best_bid_price
-                          << " ask=" << md.best_ask_price
+                          << " bid=" << std::fixed << std::setprecision(4) << bid_dollars
+                          << " ask=" << ask_dollars
                           << " trades=" << md.trades.size()
                           << " mm_fills=" << md.mm_fills.size() << "\n";
             }

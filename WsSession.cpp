@@ -576,7 +576,7 @@ void WsSession::run_simulation(
             strategy = std::make_unique<HeuristicStrategy>();
         }
         MarketSimulator simulator(sim_cfg);
-        MarketMaker mm(risk_cfg, std::move(strategy));
+        MarketMaker mm(simulator.instrument_meta(), risk_cfg, std::move(strategy));
         PerformanceModule perf(static_cast<std::size_t>(std::max(1, sim_cfg.iterations)));
 
         const auto wall_start = std::chrono::steady_clock::now();
@@ -616,6 +616,7 @@ void WsSession::run_simulation(
             enqueue_outbound_message(
                 make_update_json(
                     md,
+                    simulator.instrument_meta(),
                     iteration,
                     run_id,
                     false,
@@ -639,6 +640,7 @@ void WsSession::run_simulation(
         }
         enqueue_outbound_message(make_update_json(
             final_md,
+            simulator.instrument_meta(),
             processed == 0 ? 0 : processed - 1,
             run_id,
             true,
@@ -769,6 +771,7 @@ std::string WsSession::make_error_json(const std::string& message) const {
 
 std::string WsSession::make_update_json(
     const MarketDataEvent& md,
+    const Instrument& instrument,
     int iteration,
     int run_id,
     bool is_final,
@@ -777,6 +780,7 @@ std::string WsSession::make_update_json(
     double average_iteration_ms,
     int processed_iterations,
     double throughput_eps) const {
+    // JSON boundary: convert tick-denominated prices to dollars on the way out.
     std::ostringstream out;
     out << std::setprecision(std::numeric_limits<double>::max_digits10);
     out << "{\"schema_version\":" << config_.schema_version
@@ -784,14 +788,14 @@ std::string WsSession::make_update_json(
         << ",\"run_id\":" << run_id
         << ",\"iteration\":" << iteration
         << ",\"is_final\":" << (is_final ? "true" : "false")
-        << ",\"best_bid_price\":" << md.best_bid_price
-        << ",\"best_ask_price\":" << md.best_ask_price
-        << ",\"spread\":" << (md.best_ask_price - md.best_bid_price)
+        << ",\"best_bid_price\":" << instrument.to_price(md.best_bid_price)
+        << ",\"best_ask_price\":" << instrument.to_price(md.best_ask_price)
+        << ",\"spread\":" << instrument.to_price(md.best_ask_price - md.best_bid_price)
         << ",\"trades\":[";
 
     for (std::size_t i = 0; i < md.trades.size(); ++i) {
         const auto& trade = md.trades[i];
-        out << "{\"price\":" << trade.price
+        out << "{\"price\":" << instrument.to_price(trade.price)
             << ",\"size\":" << trade.size
             << ",\"side\":\"" << side_to_string(trade.aggressor_side) << "\"}";
         if (i + 1 < md.trades.size()) {

@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 #include <chrono>
 #include "include/RiskManager.h"
+#include "include/Instrument.h"
 
 namespace {
 
 constexpr double EPS = 1e-6;
+const Instrument kIns{0.01};
+Ticks T(double dollars) { return kIns.to_ticks(dollars); }
 
 using time_point = std::chrono::system_clock::time_point;
 
@@ -19,12 +22,12 @@ time_point offset_ms(int ms) {
 MarketDataEvent make_md(double bid, double ask, time_point ts, int64_t seq = 1) {
     MarketDataEvent md;
     md.instrument = "TEST";
-    md.best_bid_price = bid;
-    md.best_ask_price = ask;
+    md.best_bid_price = T(bid);
+    md.best_ask_price = T(ask);
     md.best_bid_size = 100;
     md.best_ask_size = 100;
-    md.bid_levels.emplace_back(bid, 100, 1ULL, ts);
-    md.ask_levels.emplace_back(ask, 100, 2ULL, ts);
+    md.bid_levels.emplace_back(T(bid), 100, 1ULL, ts);
+    md.ask_levels.emplace_back(T(ask), 100, 2ULL, ts);
     md.timestamp = ts;
     md.sequence_number = seq;
     return md;
@@ -51,7 +54,7 @@ TEST(RiskManager, test_max_net_position_warning) {
     RiskManager rm(cfg);
     Accounting acct(100000.0);
     for (int i = 0; i < 80; ++i)
-        acct.on_fill(Side::BUY, 100.0, 1, true);
+        acct.on_fill(Side::BUY, T(100.0), 1, true);
     auto md = make_md(100.0, 100.10, base_time());
     EXPECT_EQ(rm.evaluate(acct, md, 100.05), RiskState::Warning);
     EXPECT_TRUE(rm.is_quoting_allowed());
@@ -62,7 +65,7 @@ TEST(RiskManager, test_max_net_position_breached) {
     cfg.max_net_position = 100;
     RiskManager rm(cfg);
     Accounting acct(100000.0);
-    acct.on_fill(Side::BUY, 100.0, 100, true);
+    acct.on_fill(Side::BUY, T(100.0), 100, true);
     auto md = make_md(100.0, 100.10, base_time());
     EXPECT_EQ(rm.evaluate(acct, md, 100.05), RiskState::Breached);
     EXPECT_FALSE(rm.is_quoting_allowed());
@@ -74,7 +77,7 @@ TEST(RiskManager, test_max_notional_exposure_breached) {
     cfg.max_net_position = 10000;
     RiskManager rm(cfg);
     Accounting acct(1000000.0);
-    acct.on_fill(Side::BUY, 100.0, 100, true);
+    acct.on_fill(Side::BUY, T(100.0), 100, true);
     auto md = make_md(100.0, 100.10, base_time());
     EXPECT_EQ(rm.evaluate(acct, md, 100.05), RiskState::Breached);
 }
@@ -88,7 +91,7 @@ TEST(RiskManager, test_max_drawdown_breached) {
     Accounting acct(100000.0);
     auto md1 = make_md(100.0, 100.10, base_time());
     rm.evaluate(acct, md1, 100.05);
-    acct.on_fill(Side::BUY, 100.0, 10, true);
+    acct.on_fill(Side::BUY, T(100.0), 10, true);
     acct.mark_to_market(89.0);
     auto md2 = make_md(88.95, 89.05, offset_ms(100), 2);
     EXPECT_EQ(rm.evaluate(acct, md2, 89.0), RiskState::Breached);
@@ -105,7 +108,7 @@ TEST(RiskManager, test_max_drawdown_hwm_tracks) {
     auto md1 = make_md(100.0, 100.10, base_time());
     rm.evaluate(acct, md1, 100.05);
     EXPECT_NEAR(rm.high_water_mark(), 0.0, EPS);
-    acct.on_fill(Side::BUY, 100.0, 10, true);
+    acct.on_fill(Side::BUY, T(100.0), 10, true);
     acct.mark_to_market(110.0);
     auto md2 = make_md(109.95, 110.05, offset_ms(100), 2);
     rm.evaluate(acct, md2, 110.0);
@@ -184,7 +187,7 @@ TEST(RiskManager, test_state_normal_to_warning) {
     Accounting acct(100000.0);
     auto md1 = make_md(100.0, 100.10, base_time());
     EXPECT_EQ(rm.evaluate(acct, md1, 100.05), RiskState::Normal);
-    acct.on_fill(Side::BUY, 100.0, 85, true);
+    acct.on_fill(Side::BUY, T(100.0), 85, true);
     auto md2 = make_md(100.0, 100.10, offset_ms(100), 2);
     EXPECT_EQ(rm.evaluate(acct, md2, 100.05), RiskState::Warning);
 }
@@ -196,7 +199,7 @@ TEST(RiskManager, test_state_normal_to_breached) {
     Accounting acct(100000.0);
     auto md1 = make_md(100.0, 100.10, base_time());
     EXPECT_EQ(rm.evaluate(acct, md1, 100.05), RiskState::Normal);
-    acct.on_fill(Side::BUY, 100.0, 100, true);
+    acct.on_fill(Side::BUY, T(100.0), 100, true);
     auto md2 = make_md(100.0, 100.10, offset_ms(100), 2);
     EXPECT_EQ(rm.evaluate(acct, md2, 100.05), RiskState::Breached);
 }
@@ -208,10 +211,10 @@ TEST(RiskManager, test_breached_requires_cooldown) {
     cfg.max_stale_data_ms = 100000.0;
     RiskManager rm(cfg);
     Accounting acct(100000.0);
-    acct.on_fill(Side::BUY, 100.0, 100, true);
+    acct.on_fill(Side::BUY, T(100.0), 100, true);
     auto md1 = make_md(100.0, 100.10, base_time());
     EXPECT_EQ(rm.evaluate(acct, md1, 100.05), RiskState::Breached);
-    acct.on_fill(Side::SELL, 100.0, 100, true);
+    acct.on_fill(Side::SELL, T(100.0), 100, true);
     auto md2 = make_md(100.0, 100.10, offset_ms(1000), 2);
     EXPECT_EQ(rm.evaluate(acct, md2, 100.05), RiskState::Breached);
 }
@@ -223,10 +226,10 @@ TEST(RiskManager, test_breached_recovery) {
     cfg.max_stale_data_ms = 100000.0;
     RiskManager rm(cfg);
     Accounting acct(100000.0);
-    acct.on_fill(Side::BUY, 100.0, 100, true);
+    acct.on_fill(Side::BUY, T(100.0), 100, true);
     auto md1 = make_md(100.0, 100.10, base_time());
     EXPECT_EQ(rm.evaluate(acct, md1, 100.05), RiskState::Breached);
-    acct.on_fill(Side::SELL, 100.0, 100, true);
+    acct.on_fill(Side::SELL, T(100.0), 100, true);
     auto md2 = make_md(100.0, 100.10, offset_ms(6000), 2);
     EXPECT_EQ(rm.evaluate(acct, md2, 100.05), RiskState::Normal);
 }
@@ -239,10 +242,10 @@ TEST(RiskManager, test_breached_no_recovery_if_warning) {
     cfg.max_stale_data_ms = 100000.0;
     RiskManager rm(cfg);
     Accounting acct(100000.0);
-    acct.on_fill(Side::BUY, 100.0, 100, true);
+    acct.on_fill(Side::BUY, T(100.0), 100, true);
     auto md1 = make_md(100.0, 100.10, base_time());
     EXPECT_EQ(rm.evaluate(acct, md1, 100.05), RiskState::Breached);
-    acct.on_fill(Side::SELL, 100.0, 15, true);
+    acct.on_fill(Side::SELL, T(100.0), 15, true);
     auto md2 = make_md(100.0, 100.10, offset_ms(6000), 2);
     EXPECT_EQ(rm.evaluate(acct, md2, 100.05), RiskState::Breached);
 }
@@ -286,7 +289,7 @@ TEST(RiskManager, test_kill_switch_reset_unsafe) {
     cfg.max_net_position = 100;
     RiskManager rm(cfg);
     Accounting acct(100000.0);
-    acct.on_fill(Side::BUY, 100.0, 100, true);
+    acct.on_fill(Side::BUY, T(100.0), 100, true);
     auto md = make_md(100.0, 100.10, base_time());
     rm.evaluate(acct, md, 100.05);
     rm.engage_kill_switch();
@@ -312,13 +315,13 @@ TEST(RiskManager, test_is_quoting_allowed_integration) {
     EXPECT_EQ(rm.current_state(), RiskState::Normal);
     EXPECT_TRUE(rm.is_quoting_allowed());
 
-    acct.on_fill(Side::BUY, 100.0, 85, true);
+    acct.on_fill(Side::BUY, T(100.0), 85, true);
     auto md2 = make_md(100.0, 100.10, offset_ms(100), 2);
     rm.evaluate(acct, md2, 100.05);
     EXPECT_EQ(rm.current_state(), RiskState::Warning);
     EXPECT_TRUE(rm.is_quoting_allowed());
 
-    acct.on_fill(Side::BUY, 100.0, 20, true);
+    acct.on_fill(Side::BUY, T(100.0), 20, true);
     auto md3 = make_md(100.0, 100.10, offset_ms(200), 3);
     rm.evaluate(acct, md3, 100.05);
     EXPECT_EQ(rm.current_state(), RiskState::Breached);

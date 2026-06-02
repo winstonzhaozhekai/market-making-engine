@@ -3,7 +3,10 @@
 #include <algorithm>
 
 RiskManager::RiskManager(const RiskConfig& cfg)
-    : config_(cfg) {
+    : RiskManager(Instrument{}, cfg) {}
+
+RiskManager::RiskManager(Instrument instrument, const RiskConfig& cfg)
+    : instrument_(instrument), config_(cfg) {
     last_results_.reserve(7);
 }
 
@@ -94,7 +97,8 @@ RiskRuleResult RiskManager::eval_stale_market_data(std::chrono::system_clock::ti
 }
 
 RiskRuleResult RiskManager::eval_max_quote_spread(const MarketDataEvent& md) {
-    double spread = md.best_ask_price - md.best_bid_price;
+    Ticks spread_ticks = md.best_ask_price - md.best_bid_price;
+    double spread = static_cast<double>(spread_ticks) * instrument_.tick_size;
     double limit = config_.max_quote_spread;
     double ratio = spread / limit;
     RiskState level = classify(ratio);

@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
 
     MarketSimulator simulator(config);
     RiskConfig risk_cfg;
-    MarketMaker mm(risk_cfg, std::move(strategy));
+    MarketMaker mm(simulator.instrument_meta(), risk_cfg, std::move(strategy));
 
     PerformanceModule perf(static_cast<size_t>(events));
 

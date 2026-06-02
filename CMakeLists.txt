@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
 
+# CMake 4.0 removed the FindBoost module (CMP0167). vcpkg ships
+# BoostConfig.cmake, so prefer the CONFIG mode unconditionally.
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
 project(market_making_engine LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -18,7 +24,7 @@ target_compile_options(mme_warnings INTERFACE
 
 # ---- Dependencies ----------------------------------------------------------
 
-find_package(Boost REQUIRED COMPONENTS system thread)
+find_package(Boost CONFIG REQUIRED COMPONENTS system thread)
 find_package(GTest CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 

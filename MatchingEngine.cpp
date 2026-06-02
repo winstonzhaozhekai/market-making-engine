@@ -2,7 +2,7 @@
 #include <algorithm>
 
 OrderStatus MatchingEngine::add_order(Order order) {
-    if (order.leaves_qty <= 0 || order.price <= 0.0) {
+    if (order.leaves_qty <= 0 || order.price <= 0) {
         order.status = OrderStatus::REJECTED;
         return OrderStatus::REJECTED;
     }
@@ -57,19 +57,17 @@ bool MatchingEngine::cancel_order(uint64_t order_id) {
 }
 
 std::vector<FillEvent> MatchingEngine::match_incoming_order(
-    Side aggressor_side, double price, int qty,
+    Side aggressor_side, Ticks price, int qty,
     uint64_t trade_id,
     std::chrono::system_clock::time_point timestamp)
 {
     std::vector<FillEvent> fills;
     int remaining = qty;
 
-    // Aggressor BUY hits resting ASKs; aggressor SELL hits resting BIDs
     auto& passive_book = (aggressor_side == Side::BUY) ? ask_book : bid_book;
 
     auto it = passive_book.begin();
     while (it != passive_book.end() && remaining > 0) {
-        // Check price compatibility
         if (aggressor_side == Side::BUY && it->price > price) break;
         if (aggressor_side == Side::SELL && it->price < price) break;
 

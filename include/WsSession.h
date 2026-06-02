@@ -16,6 +16,7 @@
 #include <thread>
 #include <vector>
 
+#include "Instrument.h"
 #include "RiskManager.h"
 #include "SimulationConfig.h"
 
@@ -173,6 +174,7 @@ private:
     std::string make_error_json(const std::string& message) const;
     std::string make_update_json(
         const MarketDataEvent& md,
+        const Instrument& instrument,
         int iteration,
         int run_id,
         bool is_final,

@@ -5,21 +5,21 @@
 #include <cstdint>
 #include <chrono>
 #include "Order.h"
+#include "include/Instrument.h"
 
 struct OrderLevel {
-    double price;
+    Ticks price;
     int size;
     uint64_t order_id;
     std::chrono::system_clock::time_point timestamp;
 
-    // Constructor
-    OrderLevel(double p, int s, uint64_t id, std::chrono::system_clock::time_point ts)
+    OrderLevel(Ticks p, int s, uint64_t id, std::chrono::system_clock::time_point ts)
         : price(p), size(s), order_id(id), timestamp(ts) {}
 };
 
 struct Trade {
     Side aggressor_side;
-    double price;
+    Ticks price;
     int size;
     uint64_t trade_id;
     std::chrono::system_clock::time_point timestamp;
@@ -27,7 +27,7 @@ struct Trade {
 
 struct PartialFillEvent {
     uint64_t order_id;
-    double price;
+    Ticks price;
     int filled_size;
     int remaining_size;
     std::chrono::system_clock::time_point timestamp;
@@ -35,8 +35,8 @@ struct PartialFillEvent {
 
 struct MarketDataEvent {
     std::string instrument;
-    double best_bid_price;
-    double best_ask_price;
+    Ticks best_bid_price;
+    Ticks best_ask_price;
     int best_bid_size;
     int best_ask_size;
     std::vector<OrderLevel> bid_levels;

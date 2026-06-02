@@ -2,6 +2,7 @@
 #define RISKMANAGER_H
 
 #include "Accounting.h"
+#include "Instrument.h"
 #include "../MarketDataEvent.h"
 #include <vector>
 #include <deque>
@@ -45,6 +46,7 @@ struct RiskConfig {
 class RiskManager {
 public:
     explicit RiskManager(const RiskConfig& cfg = RiskConfig{});
+    RiskManager(Instrument instrument, const RiskConfig& cfg);
 
     RiskState evaluate(const Accounting& acct, const MarketDataEvent& md, double mark_price);
 
@@ -62,6 +64,7 @@ public:
     const RiskConfig& config() const;
 
 private:
+    Instrument instrument_;
     RiskConfig config_;
     RiskState state_ = RiskState::Normal;
     std::vector<RiskRuleResult> last_results_;

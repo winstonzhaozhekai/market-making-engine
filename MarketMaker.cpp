@@ -6,14 +6,27 @@
 #include <algorithm>
 #include <cmath>
 
-MarketMaker::MarketMaker()
-    : strategy_(std::make_unique<HeuristicStrategy>()) {}
+namespace {
+constexpr double kInitialCapital = 100000.0;
+}
 
-MarketMaker::MarketMaker(const RiskConfig& cfg)
-    : risk_manager_(cfg), strategy_(std::make_unique<HeuristicStrategy>()) {}
+MarketMaker::MarketMaker(Instrument instrument)
+    : instrument_(instrument),
+      accounting_(instrument, kInitialCapital),
+      risk_manager_(instrument, RiskConfig{}),
+      strategy_(std::make_unique<HeuristicStrategy>()) {}
 
-MarketMaker::MarketMaker(const RiskConfig& cfg, std::unique_ptr<Strategy> strategy)
-    : risk_manager_(cfg), strategy_(std::move(strategy)) {}
+MarketMaker::MarketMaker(Instrument instrument, const RiskConfig& cfg)
+    : instrument_(instrument),
+      accounting_(instrument, kInitialCapital),
+      risk_manager_(instrument, cfg),
+      strategy_(std::make_unique<HeuristicStrategy>()) {}
+
+MarketMaker::MarketMaker(Instrument instrument, const RiskConfig& cfg, std::unique_ptr<Strategy> strategy)
+    : instrument_(instrument),
+      accounting_(instrument, kInitialCapital),
+      risk_manager_(instrument, cfg),
+      strategy_(std::move(strategy)) {}
 
 void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& simulator) {
     if (md.sequence_number != last_processed_sequence + 1 && last_processed_sequence != 0) {
@@ -28,18 +41,16 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
         return;
     }
 
-    // Process fill events for our resting orders
     for (const auto& fill : md.mm_fills) {
         if (active_orders.count(fill.order_id)) {
             on_fill(fill);
         }
     }
 
-    // Mark-to-market on each market data event
-    double mid_price = (md.best_bid_price + md.best_ask_price) / 2.0;
-    accounting_.mark_to_market(mid_price);
+    double mid_dollars = instrument_.to_price(md.best_bid_price + md.best_ask_price) / 2.0;
+    accounting_.mark_to_market(mid_dollars);
 
-    risk_manager_.evaluate(accounting_, md, mid_price);
+    risk_manager_.evaluate(accounting_, md, mid_dollars);
     if (!risk_manager_.is_quoting_allowed()) {
         cancel_all_orders(simulator, md.timestamp);
         return;
@@ -47,7 +58,6 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
 
     update_quotes(md, simulator);
 
-    // Store last prices for report/mark-price (replaces unbounded market_data_log)
     last_bid_price_ = md.best_bid_price;
     last_ask_price_ = md.best_ask_price;
     has_last_event_ = true;
@@ -56,10 +66,8 @@ void MarketMaker::on_market_data(const MarketDataEvent& md, MarketSimulator& sim
 void MarketMaker::on_fill(const FillEvent& fill) {
     ++total_fills;
 
-    // Delegate to accounting (MM resting orders are maker fills)
     accounting_.on_fill(fill.side, fill.price, fill.fill_qty, /*is_maker=*/true);
 
-    // Update or remove active order
     auto it = active_orders.find(fill.order_id);
     if (it != active_orders.end()) {
         if (fill.leaves_qty == 0) {
@@ -72,7 +80,7 @@ void MarketMaker::on_fill(const FillEvent& fill) {
 
     std::cout << "FILL: " << (fill.side == Side::BUY ? "BUY" : "SELL")
               << " " << fill.fill_qty << " @ " << std::fixed << std::setprecision(4)
-              << fill.price << " (leaves=" << fill.leaves_qty
+              << instrument_.to_price(fill.price) << " (leaves=" << fill.leaves_qty
               << ") pos=" << accounting_.position()
               << " cash=" << std::setprecision(2) << accounting_.cash()
               << " realized=" << accounting_.realized_pnl()
@@ -88,23 +96,22 @@ void MarketMaker::cancel_all_orders(MarketSimulator& simulator, std::chrono::sys
 }
 
 void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simulator) {
-    // Cancel stale orders before placing new ones
     cancel_all_orders(simulator, md.timestamp);
 
-    double best_bid = md.bid_levels[0].price;
-    double best_ask = md.ask_levels[0].price;
-    double mid_price = (best_bid + best_ask) / 2.0;
+    Ticks best_bid = md.bid_levels[0].price;
+    Ticks best_ask = md.ask_levels[0].price;
+    double mid_dollars = instrument_.to_price(best_bid + best_ask) / 2.0;
 
-    // Build snapshot for strategy
     StrategySnapshot snap;
     snap.best_bid = best_bid;
     snap.best_ask = best_ask;
-    snap.mid_price = mid_price;
+    snap.mid_price = mid_dollars;
     snap.bid_levels = md.bid_levels;
     snap.ask_levels = md.ask_levels;
     snap.trades = md.trades;
     snap.position = accounting_.position();
     snap.max_position = risk_manager_.config().max_net_position;
+    snap.tick_size = instrument_.tick_size;
     snap.timestamp = md.timestamp;
     snap.sequence_number = md.sequence_number;
 
@@ -114,12 +121,10 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
         return;
     }
 
-    // Apply risk clamps on sizes
     const auto& cfg = risk_manager_.config();
     int bid_size = std::max(cfg.min_quote_size, std::min(decision.bid_size, cfg.max_quote_size));
     int ask_size = std::max(cfg.min_quote_size, std::min(decision.ask_size, cfg.max_quote_size));
 
-    // Submit bid
     uint64_t bid_id = generate_order_id();
     Order bid_order(bid_id, Side::BUY, decision.bid_price, bid_size, md.timestamp);
     if (simulator.submit_order(bid_order) == OrderStatus::ACKNOWLEDGED) {
@@ -128,7 +133,6 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
         risk_manager_.record_quote(md.timestamp);
     }
 
-    // Submit ask
     uint64_t ask_id = generate_order_id();
     Order ask_order(ask_id, Side::SELL, decision.ask_price, ask_size, md.timestamp);
     if (simulator.submit_order(ask_order) == OrderStatus::ACKNOWLEDGED) {
@@ -159,10 +163,9 @@ void MarketMaker::report() {
         return;
     }
 
-    double mark = (last_bid_price_ + last_ask_price_) / 2.0;
+    double mark = instrument_.to_price(last_bid_price_ + last_ask_price_) / 2.0;
     accounting_.mark_to_market(mark);
 
-    // Inline skew formula (same as get_inventory_skew)
     const double skew_factor = 0.001;
     const double max_skew = 0.01;
     double skew = -accounting_.position() * skew_factor;
@@ -202,7 +205,7 @@ int MarketMaker::get_inventory() const {
 
 double MarketMaker::get_mark_price() const {
     if (!has_last_event_) return 0.0;
-    return (last_bid_price_ + last_ask_price_) / 2.0;
+    return instrument_.to_price(last_bid_price_ + last_ask_price_) / 2.0;
 }
 
 double MarketMaker::get_unrealized_pnl() const {
