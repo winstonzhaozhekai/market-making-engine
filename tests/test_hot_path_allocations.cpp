@@ -14,9 +14,12 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <new>
+#include <string>
 #include <vector>
 
 #include "MarketDataEvent.h"
@@ -27,6 +30,7 @@
 #include "include/Logger.h"
 #include "include/RiskManager.h"
 #include "include/SimulationConfig.h"
+#include "include/SpscLogger.h"
 #include "include/Strategy.h"
 
 namespace {
@@ -85,7 +89,12 @@ MarketDataEvent make_md(Ticks bid_px, Ticks ask_px, int64_t seq, int64_t ts_ns) 
     return md;
 }
 
-TEST(HotPathAllocations, steady_state_emits_zero_allocations) {
+// Drives the MM hot path through `kMeasured` no-op ticks inside the
+// allocation-counter guard. Caller supplies the Logger so we can exercise
+// the same invariant with NullLogger and with SpscLogger (the M6 closure
+// of C3 proper).
+template <typename LoggerT>
+void run_zero_alloc_loop(std::unique_ptr<LoggerT> logger) {
     SimulationConfig cfg;
     cfg.seed = 1;
     cfg.iterations = 0;
@@ -98,7 +107,7 @@ TEST(HotPathAllocations, steady_state_emits_zero_allocations) {
 
     MarketMaker mm(ins, RiskConfig{},
                    std::make_unique<FixedQuoteStrategy>(bp, ap, 5, 5),
-                   std::make_unique<NullLogger>());
+                   std::move(logger));
 
     // Pre-build a fixed batch of MarketDataEvents so the loop body does
     // not allocate via event construction. (Simulator-generated events
@@ -127,6 +136,23 @@ TEST(HotPathAllocations, steady_state_emits_zero_allocations) {
             << "Expected zero heap allocations across " << kMeasured
             << " steady-state ticks, observed " << g.count();
     }
+}
+
+TEST(HotPathAllocations, steady_state_emits_zero_allocations) {
+    run_zero_alloc_loop(std::make_unique<NullLogger>());
+}
+
+// C3-proper invariant: routing the same hot path through the SPSC binary
+// logger must not allocate either. Construction (ring buffer, drain
+// thread, file open + header write) happens outside the guard. Producer-
+// side encoding uses a stack buffer + try_push only.
+TEST(HotPathAllocations, spsc_logger_steady_state_zero_allocations) {
+    const std::string path = (std::filesystem::temp_directory_path()
+                              / "spsc_logger_zero_alloc.bin").string();
+    std::remove(path.c_str());
+    auto logger = std::make_unique<SpscLogger>(path);
+    run_zero_alloc_loop(std::move(logger));
+    std::remove(path.c_str());
 }
 
 } // namespace
