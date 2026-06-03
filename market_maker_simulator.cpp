@@ -15,7 +15,7 @@
 #include "include/SimulationConfig.h"
 #include "include/HeuristicStrategy.h"
 #include "strategies/AvellanedaStoikovStrategy.h"
-#include "include/BinaryLogger.h"
+#include "include/SpscLogger.h"
 
 using namespace std;
 
@@ -59,9 +59,10 @@ void print_usage() {
               << "  --seed <n>          RNG seed (default: 42)\n"
               << "  --iterations <n>    Number of events to process (default: 1000)\n"
               << "  --latency-ms <n>    Per-event latency in ms (default: 10)\n"
-              << "  --event-log <path>  Write generated events to log file\n"
+              << "  --event-log <path>  Write generated MD events to binary log\n"
               << "  --replay <path>     Compatibility alias for --mode replay + replay path\n"
-              << "  --binary-log <path> Write events in compact binary format\n"
+              << "  --engine-log <path> Route engine alerts through SPSC binary logger\n"
+              << "                      (default: human-readable stdout output)\n"
               << "  --quiet             Suppress per-event output\n"
               << "  --help              Show this help text\n";
 }
@@ -75,7 +76,7 @@ bool read_arg_value(int argc, char* argv[], int& i, std::string& out) {
 }
 
 std::string strategy_name = "heuristic";
-std::string binary_log_path;
+std::string engine_log_path;
 
 SimulationConfig parse_args(int argc, char* argv[]) {
     SimulationConfig config;
@@ -122,11 +123,11 @@ SimulationConfig parse_args(int argc, char* argv[]) {
             }
             config.replay_log_path = value;
             config.mode = SimulationMode::Replay;
-        } else if (arg == "--binary-log") {
+        } else if (arg == "--engine-log") {
             if (!read_arg_value(argc, argv, i, value)) {
-                throw std::invalid_argument("--binary-log requires a value");
+                throw std::invalid_argument("--engine-log requires a value");
             }
-            binary_log_path = value;
+            engine_log_path = value;
         } else if (arg == "--quiet") {
             config.quiet = true;
         } else if (arg == "--help") {
@@ -194,18 +195,14 @@ int main(int argc, char* argv[]) {
         }
         RiskConfig risk_cfg;
         const Instrument instrument = simulator.instrument_meta();
-        MarketMaker mm(instrument, risk_cfg, std::move(strategy),
-                       std::make_unique<StdoutLogger>());
-
-        // Optional binary logger
-        std::unique_ptr<BinaryLogger> bin_logger;
-        if (!binary_log_path.empty()) {
-            bin_logger = std::make_unique<BinaryLogger>(binary_log_path, instrument);
-            if (!bin_logger->is_open()) {
-                std::cerr << "Failed to open binary log: " << binary_log_path << "\n";
-                return 1;
-            }
+        std::unique_ptr<Logger> mm_logger;
+        if (!engine_log_path.empty()) {
+            mm_logger = std::make_unique<SpscLogger>(engine_log_path);
+        } else {
+            mm_logger = std::make_unique<StdoutLogger>();
         }
+        MarketMaker mm(instrument, risk_cfg, std::move(strategy),
+                       std::move(mm_logger));
 
         int processed = 0;
         int64_t last_sequence = 0;
@@ -227,11 +224,6 @@ int main(int argc, char* argv[]) {
 
             // MM reads market data, submits/cancels orders via simulator
             mm.on_market_data(md, simulator);
-
-            // Binary log if enabled
-            if (bin_logger) {
-                bin_logger->log_event(md);
-            }
 
             ++processed;
             last_sequence = md.sequence_number;

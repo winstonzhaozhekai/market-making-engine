@@ -3,7 +3,7 @@
 
 #include <chrono>
 #include <cstdint>
-#include <fstream>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -12,10 +12,13 @@
 #include "include/Instrument.h"
 #include "include/SimulationConfig.h"
 
+class SpscMdLogger;
+
 class MarketSimulator {
 public:
     MarketSimulator(std::string instrument_, double init_price_, double spread_, double volatility_, int latency_ms_);
     explicit MarketSimulator(const SimulationConfig& config);
+    ~MarketSimulator();
     MarketDataEvent generate_event();
 
     // `type` is the realistic exchange order-type flag. MM-side callers
@@ -43,7 +46,7 @@ private:
     int64_t sequence_number;
     uint64_t sim_order_counter_ = 0;
     std::chrono::system_clock::time_point simulation_clock;
-    std::ofstream event_log_stream;
+    std::unique_ptr<SpscMdLogger> event_logger_;
     std::vector<MarketDataEvent> replay_events;
     std::size_t replay_index;
 
@@ -55,10 +58,7 @@ private:
     void simulate_trade_activity(std::vector<Trade>& trades, std::vector<FillEvent>& mm_fills);
     uint64_t generate_order_id();
     std::chrono::system_clock::time_point current_time();
-    void maybe_write_event_log(const MarketDataEvent& event);
-    bool load_event_log(const std::string& path);
-    std::string serialize_event(const MarketDataEvent& event) const;
-    MarketDataEvent deserialize_event(const std::string& line) const;
+    void load_binary_event_log(const std::string& path);
 };
 
 #endif // MARKET_SIMULATOR_H
