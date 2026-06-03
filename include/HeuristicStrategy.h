@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-class HeuristicStrategy : public Strategy {
+class HeuristicStrategy final : public Strategy {
 public:
     QuoteDecision compute_quotes(const StrategySnapshot& snap) override {
         const double base_spread = 0.02;

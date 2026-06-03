@@ -19,7 +19,7 @@ struct AvellanedaStoikovConfig {
     size_t ofi_window = 50;
 };
 
-class AvellanedaStoikovStrategy : public Strategy {
+class AvellanedaStoikovStrategy final : public Strategy {
 public:
     explicit AvellanedaStoikovStrategy(const AvellanedaStoikovConfig& cfg = AvellanedaStoikovConfig{});
 
