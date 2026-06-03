@@ -2,17 +2,80 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include "MarketSimulator.h"
-#include "MarketMaker.h"
 #include "include/Logger.h"
+#include "include/MarketMakerT.h"
 #include "include/SimulationConfig.h"
 #include "include/HeuristicStrategy.h"
 #include "include/Strategy.h"
 #include "strategies/AvellanedaStoikovStrategy.h"
 #include "PerformanceModule.h"
+
+// Templated on the concrete strategy + logger so the compiler can
+// devirtualize compute_quotes / on_fill / on_sequence_gap / on_empty_book /
+// on_amend_rejected. `[[gnu::noinline]]` keeps the tick function as a
+// discoverable symbol under -O3 -flto so the M7 no-virtual-dispatch
+// disassembly check has something to point at. Without it the whole loop
+// gets inlined into main and we lose the symbol anchor.
+template <class StrategyT, class LoggerT>
+[[gnu::noinline]] static void tick_once(
+    mme::MarketMakerT<StrategyT, LoggerT>& mm,
+    const MarketDataEvent& md,
+    MarketSimulator& simulator) {
+    mm.on_market_data(md, simulator);
+}
+
+template <class StrategyT, class LoggerT>
+static void run_bench(int events, uint32_t seed,
+                      const std::string& strategy_name,
+                      StrategyT& strategy, LoggerT& logger) {
+    SimulationConfig config;
+    config.seed = seed;
+    config.iterations = events;
+    config.latency_ms = 0;
+    config.quiet = true;
+
+    MarketSimulator simulator(config);
+    RiskConfig risk_cfg;
+    mme::MarketMakerT<StrategyT, LoggerT> mm(
+        simulator.instrument_meta(), risk_cfg, &strategy, &logger);
+
+    PerformanceModule perf(static_cast<size_t>(events));
+
+    std::cout << "Strategy: " << strategy_name
+              << ", events: " << events
+              << ", seed: " << seed << "\n";
+
+    auto wall_start = std::chrono::steady_clock::now();
+    int processed = 0;
+
+    for (int i = 0; i < events; ++i) {
+        MarketDataEvent md;
+        try {
+            md = simulator.generate_event();
+        } catch (const std::out_of_range&) {
+            break;
+        }
+
+        auto t0 = std::chrono::steady_clock::now();
+        tick_once(mm, md, simulator);
+        auto t1 = std::chrono::steady_clock::now();
+
+        int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+        perf.record_latency(ns);
+        ++processed;
+    }
+
+    auto wall_end = std::chrono::steady_clock::now();
+    perf.set_wall_time(wall_end - wall_start);
+
+    std::cout << "Benchmark complete: " << processed << " events processed\n";
+    auto wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(wall_end - wall_start).count();
+    std::cout << "Wall time: " << wall_ms << " ms\n\n";
+    perf.report_latency_percentiles();
+}
 
 int main(int argc, char* argv[]) {
     int events = 10000;
@@ -37,61 +100,17 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::unique_ptr<Strategy> strategy;
+    NullLogger logger;
     if (strategy_name == "heuristic") {
-        strategy = std::make_unique<HeuristicStrategy>();
+        HeuristicStrategy strategy;
+        run_bench(events, seed, strategy_name, strategy, logger);
     } else if (strategy_name == "avellaneda-stoikov" || strategy_name == "as") {
-        strategy = std::make_unique<AvellanedaStoikovStrategy>();
-        strategy_name = "avellaneda-stoikov";
+        AvellanedaStoikovStrategy strategy;
+        run_bench(events, seed, "avellaneda-stoikov", strategy, logger);
     } else {
         std::cerr << "Unknown strategy: " << strategy_name << "\n";
         return 1;
     }
-
-    SimulationConfig config;
-    config.seed = seed;
-    config.iterations = events;
-    config.latency_ms = 0;
-    config.quiet = true;
-
-    MarketSimulator simulator(config);
-    RiskConfig risk_cfg;
-    MarketMaker mm(simulator.instrument_meta(), risk_cfg, std::move(strategy),
-                   std::make_unique<NullLogger>());
-
-    PerformanceModule perf(static_cast<size_t>(events));
-
-    std::cout << "Strategy: " << strategy_name
-              << ", events: " << events
-              << ", seed: " << seed << "\n";
-
-    auto wall_start = std::chrono::steady_clock::now();
-    int processed = 0;
-
-    for (int i = 0; i < events; ++i) {
-        MarketDataEvent md;
-        try {
-            md = simulator.generate_event();
-        } catch (const std::out_of_range&) {
-            break;
-        }
-
-        auto t0 = std::chrono::steady_clock::now();
-        mm.on_market_data(md, simulator);
-        auto t1 = std::chrono::steady_clock::now();
-
-        int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-        perf.record_latency(ns);
-        ++processed;
-    }
-
-    auto wall_end = std::chrono::steady_clock::now();
-    perf.set_wall_time(wall_end - wall_start);
-
-    std::cout << "Benchmark complete: " << processed << " events processed\n";
-    auto wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(wall_end - wall_start).count();
-    std::cout << "Wall time: " << wall_ms << " ms\n\n";
-    perf.report_latency_percentiles();
 
     return 0;
 }
