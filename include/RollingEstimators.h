@@ -2,85 +2,110 @@
 #define ROLLING_ESTIMATORS_H
 
 #include "../MarketDataEvent.h"
-#include <deque>
-#include <cmath>
-#include <span>
-#include <vector>
+#include "RingBuffer.h"
 
+#include <cmath>
+#include <cstddef>
+#include <span>
+
+// Sliding-window sample standard deviation of log-style returns
+// (mid_t / mid_{t-1} - 1), computed with West's algorithm for online
+// add/remove. sigma() is O(1) per call; the per-tick add/remove pair
+// is six FLOPs. Numerically stable across long runs in the same window
+// that a naive sum / sum_of_squares pair would drift in.
 class RollingVolatility {
 public:
-    explicit RollingVolatility(size_t window = 100) : window_(window) {}
+    explicit RollingVolatility(std::size_t window = 100)
+        : returns_(window > 0 ? window : 1), window_(window) {}
 
     void on_mid(double mid) {
-        if (!mids_.empty()) {
-            double prev = mids_.back();
-            if (prev > 0.0) {
-                double ret = (mid - prev) / prev;
-                returns_.push_back(ret);
-                if (returns_.size() > window_) {
-                    returns_.pop_front();
-                }
+        if (has_prev_ && prev_mid_ > 0.0) {
+            const double ret = (mid - prev_mid_) / prev_mid_;
+            if (returns_.size() == window_) {
+                const double old = returns_.front();
+                returns_.pop_front();
+                remove_sample(old);
             }
+            returns_.push_back(ret);
+            add_sample(ret);
         }
-        mids_.push_back(mid);
-        if (mids_.size() > window_ + 1) {
-            mids_.pop_front();
-        }
+        prev_mid_ = mid;
+        has_prev_ = true;
     }
 
     double sigma() const {
-        if (returns_.size() < 2) return 0.0;
-        double sum = 0.0;
-        for (double r : returns_) sum += r;
-        double mean = sum / static_cast<double>(returns_.size());
-        double sq_sum = 0.0;
-        for (double r : returns_) {
-            double diff = r - mean;
-            sq_sum += diff * diff;
-        }
-        return std::sqrt(sq_sum / static_cast<double>(returns_.size() - 1));
+        if (n_ < 2) return 0.0;
+        return std::sqrt(m2_ / static_cast<double>(n_ - 1));
     }
 
-    size_t count() const { return returns_.size(); }
+    std::size_t count() const { return n_; }
 
 private:
-    size_t window_;
-    std::deque<double> mids_;
-    std::deque<double> returns_;
+    void add_sample(double x) {
+        ++n_;
+        const double delta = x - mean_;
+        mean_ += delta / static_cast<double>(n_);
+        m2_   += delta * (x - mean_);
+    }
+
+    void remove_sample(double x) {
+        if (n_ == 1) {
+            n_ = 0; mean_ = 0.0; m2_ = 0.0;
+            return;
+        }
+        const double delta = x - mean_;
+        --n_;
+        mean_ -= delta / static_cast<double>(n_);
+        m2_   -= delta * (x - mean_);
+        if (m2_ < 0.0) m2_ = 0.0;  // clamp FP underflow
+    }
+
+    RingBuffer<double> returns_;
+    std::size_t        window_;
+    double             prev_mid_  = 0.0;
+    bool               has_prev_  = false;
+    std::size_t        n_         = 0;
+    double             mean_      = 0.0;
+    double             m2_        = 0.0;
 };
 
+// Sliding-window normalized order-flow imbalance: net signed volume
+// divided by gross signed volume. O(1) per trade via running net_sum_
+// and abs_sum_ maintained alongside the ring.
 class RollingOFI {
 public:
-    explicit RollingOFI(size_t window = 50) : window_(window) {}
+    explicit RollingOFI(std::size_t window = 50)
+        : signed_volumes_(window > 0 ? window : 1), window_(window) {}
 
     void on_trades(std::span<const Trade> trades) {
         for (const auto& t : trades) {
-            double signed_vol = (t.aggressor_side == Side::BUY) ?
-                static_cast<double>(t.size) : -static_cast<double>(t.size);
-            signed_volumes_.push_back(signed_vol);
-            if (signed_volumes_.size() > window_) {
+            const double v = (t.aggressor_side == Side::BUY)
+                ?  static_cast<double>(t.size)
+                : -static_cast<double>(t.size);
+            if (signed_volumes_.size() == window_) {
+                const double old = signed_volumes_.front();
                 signed_volumes_.pop_front();
+                net_sum_ -= old;
+                abs_sum_ -= std::abs(old);
             }
+            signed_volumes_.push_back(v);
+            net_sum_ += v;
+            abs_sum_ += std::abs(v);
         }
     }
 
     double normalized_ofi() const {
-        if (signed_volumes_.empty()) return 0.0;
-        double net = 0.0;
-        double total = 0.0;
-        for (double v : signed_volumes_) {
-            net += v;
-            total += std::abs(v);
-        }
-        if (total == 0.0) return 0.0;
-        return net / total;
+        if (abs_sum_ == 0.0) return 0.0;
+        return net_sum_ / abs_sum_;
     }
 
-    size_t count() const { return signed_volumes_.size(); }
+    std::size_t count() const { return signed_volumes_.size(); }
 
 private:
-    size_t window_;
-    std::deque<double> signed_volumes_;
+    RingBuffer<double> signed_volumes_;
+    std::size_t        window_;
+    double             net_sum_ = 0.0;
+    double             abs_sum_ = 0.0;
 };
 
 #endif // ROLLING_ESTIMATORS_H

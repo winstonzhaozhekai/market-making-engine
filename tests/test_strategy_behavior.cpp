@@ -91,6 +91,28 @@ TEST(StrategyBehavior, vol_known_value) {
     EXPECT_LT(s, 0.015);
 }
 
+TEST(StrategyBehavior, vol_west_stable_across_long_window_churn) {
+    // 100k push/pop cycles past the window boundary. West's algorithm
+    // should hold variance constant for a strictly periodic input;
+    // a naive sum / sum_of_squares pair drifts visibly here.
+    constexpr std::size_t kWindow = 32;
+    RollingVolatility vol(kWindow);
+    vol.on_mid(100.0);
+    for (int i = 0; i < 200000; ++i) {
+        vol.on_mid(i % 2 == 0 ? 100.0 : 101.0);
+    }
+    const double s_after_churn = vol.sigma();
+
+    RollingVolatility vol2(kWindow);
+    vol2.on_mid(100.0);
+    for (std::size_t i = 0; i < kWindow + 1; ++i) {
+        vol2.on_mid(i % 2 == 0 ? 100.0 : 101.0);
+    }
+    const double s_fresh = vol2.sigma();
+
+    EXPECT_NEAR(s_after_churn, s_fresh, 1e-9);
+}
+
 // ============================================================
 // RollingOFI tests (3)
 // ============================================================
