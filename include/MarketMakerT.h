@@ -71,11 +71,12 @@ public:
             return;
         }
 
+        // Process every reported fill: accounting must book it even when
+        // MM has already cancelled the slot (M8 ack/matching latency can
+        // make a fill arrive after MM's cancel landed). Slot reconciliation
+        // is guarded inside on_fill().
         for (const auto& fill : md.mm_fills) {
-            auto& slot = active_orders_[side_index(fill.side)];
-            if (slot && slot->order_id == fill.order_id) {
-                on_fill(fill);
-            }
+            on_fill(fill);
         }
 
         double mid_dollars = instrument_.to_price(md.best_bid_price + md.best_ask_price) / 2.0;

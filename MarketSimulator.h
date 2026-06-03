@@ -3,13 +3,16 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
 #include "MarketDataEvent.h"
 #include "MatchingEngine.h"
 #include "include/Instrument.h"
+#include "include/LatencyScheduler.h"
 #include "include/SimulationConfig.h"
 
 class SpscMdLogger;
@@ -50,6 +53,41 @@ private:
 
     std::vector<Trade> trades_buf_;
     std::vector<FillEvent> mm_fills_buf_;
+
+    // ---- M8 per-stage latency state ------------------------------------
+    // Engaged only when !config.all_latencies_zero(); nullopt otherwise so
+    // the M6/M7 byte-equality fast path is preserved exactly.
+    struct PendingOrder {
+        Order        order;
+        OrderType    type;
+        std::int64_t land_time_ns;
+    };
+    struct PendingFeedEvent {
+        MarketDataEvent md;
+        std::int64_t    deliver_time_ns;
+    };
+    struct PendingFill {
+        FillEvent    fill;
+        std::int64_t visible_time_ns;
+    };
+    struct LatencyState {
+        mme::StageSampler feed;
+        mme::StageSampler ack;
+        mme::StageSampler matching;
+        std::mt19937_64   rng;
+        std::int64_t      sim_clock_ns = 0;
+        std::deque<PendingOrder>     ack_queue;
+        std::deque<PendingFeedEvent> feed_queue;
+        std::deque<PendingFill>      match_queue;
+    };
+    std::optional<LatencyState> latency_;
+
+    // Produces a fresh raw MD event at current simulation time. Used by
+    // both the zero-latency fast path (returned directly) and the M8 path
+    // (enqueued in feed_queue; mm_fills stripped + deferred via match_queue).
+    MarketDataEvent produce_raw_md_event();
+    MarketDataEvent generate_event_with_latency();
+    void drain_ack_queue();
 
     void initialize_order_book();
     void update_order_book();

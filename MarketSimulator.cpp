@@ -47,6 +47,23 @@ MarketSimulator::MarketSimulator(const SimulationConfig& cfg)
         event_logger_ = std::make_unique<SpscMdLogger>(config.event_log_path);
     }
 
+    // M8: engage the discrete-event scheduler only when at least one stage
+    // has non-zero latency. The all-zero case stays on the M6/M7 fast path
+    // so the binary-log byte-equality + deterministic-replay invariants
+    // hold without the scheduler being able to perturb them.
+    if (!config.all_latencies_zero()) {
+        latency_.emplace(LatencyState{
+            mme::StageSampler(config.feed_latency),
+            mme::StageSampler(config.ack_latency),
+            mme::StageSampler(config.matching_latency),
+            std::mt19937_64(config.latency_seed),
+            0,
+            {},
+            {},
+            {},
+        });
+    }
+
     initialize_order_book();
 }
 
@@ -73,6 +90,13 @@ MarketDataEvent MarketSimulator::generate_event() {
         return replay_events[replay_index++];
     }
 
+    if (!latency_) {
+        return produce_raw_md_event();
+    }
+    return generate_event_with_latency();
+}
+
+MarketDataEvent MarketSimulator::produce_raw_md_event() {
     std::normal_distribution<> noise(0, volatility);
     mid_price_dollars += noise(rng);
     mid_price_dollars = std::max(mid_price_dollars, 0.01);
@@ -123,6 +147,83 @@ MarketDataEvent MarketSimulator::generate_event() {
     return event;
 }
 
+// Discrete-event production loop driving the three per-stage delays.
+//
+// Each pass of the inner loop advances sim_clock_ns by one production step
+// (1 µs), lands any pending orders whose ack window has matured, produces a
+// fresh raw MD event (which may already have generated fills against now-
+// resting MM orders via simulate_trade_activity), then strips and defers
+// those fills into match_queue. The raw MD is parked in feed_queue with a
+// per-event feed-latency sample as its deliver_at. The function returns the
+// head of feed_queue as soon as its deliver_at has matured, with any
+// matched-and-visible fills attached. MM therefore observes:
+//   - book state stale by ~feed_latency relative to current sim_clock
+//   - orders posted ack_latency-deferred before they can be hit
+//   - fills reported feed_latency + matching_latency after match time
+MarketDataEvent MarketSimulator::generate_event_with_latency() {
+    constexpr std::int64_t kProductionStepNs = 1000;  // 1 µs / event
+    auto& L = *latency_;
+
+    while (true) {
+        L.sim_clock_ns += kProductionStepNs;
+
+        drain_ack_queue();
+
+        MarketDataEvent raw = produce_raw_md_event();
+
+        // Defer mm_fills via matching latency. Strip both mm_fills and the
+        // derived partial_fills from the raw event so MM cannot see them
+        // until they mature.
+        if (!raw.mm_fills.empty()) {
+            for (auto& f : raw.mm_fills) {
+                std::int64_t visible_at = L.sim_clock_ns + L.matching.sample(L.rng);
+                L.match_queue.push_back(PendingFill{std::move(f), visible_at});
+            }
+            raw.mm_fills.clear();
+            raw.partial_fills.clear();
+        }
+
+        // Schedule the raw event for feed delivery.
+        std::int64_t deliver_at = L.sim_clock_ns + L.feed.sample(L.rng);
+        L.feed_queue.push_back(PendingFeedEvent{std::move(raw), deliver_at});
+
+        // Deliver the head of feed_queue if it has matured. Attach any
+        // matched fills whose visibility window has also matured.
+        if (L.feed_queue.front().deliver_time_ns <= L.sim_clock_ns) {
+            auto pending = std::move(L.feed_queue.front());
+            L.feed_queue.pop_front();
+
+            while (!L.match_queue.empty() &&
+                   L.match_queue.front().visible_time_ns <= L.sim_clock_ns) {
+                auto pf = std::move(L.match_queue.front());
+                L.match_queue.pop_front();
+                if (pf.fill.leaves_qty > 0) {
+                    pending.md.partial_fills.push_back(PartialFillEvent{
+                        pf.fill.order_id,
+                        pf.fill.price,
+                        pf.fill.fill_qty,
+                        pf.fill.leaves_qty,
+                        pf.fill.timestamp,
+                    });
+                }
+                pending.md.mm_fills.push_back(std::move(pf.fill));
+            }
+
+            return std::move(pending.md);
+        }
+    }
+}
+
+void MarketSimulator::drain_ack_queue() {
+    auto& L = *latency_;
+    while (!L.ack_queue.empty() &&
+           L.ack_queue.front().land_time_ns <= L.sim_clock_ns) {
+        auto po = std::move(L.ack_queue.front());
+        L.ack_queue.pop_front();
+        matching_engine.add_order(std::move(po.order), po.type);
+    }
+}
+
 void MarketSimulator::simulate_trade_activity(std::vector<Trade>& trades, std::vector<FillEvent>& mm_fills) {
     std::uniform_real_distribution<> prob_dist(0.0, 1.0);
     std::uniform_int_distribution<> size_dist(1, 20);
@@ -134,7 +235,42 @@ void MarketSimulator::simulate_trade_activity(std::vector<Trade>& trades, std::v
 
         if (!levels.empty()) {
             int trade_size = size_dist(rng);
-            Ticks trade_price = levels[0].price;
+            Ticks sim_top_price = levels[0].price;
+            Ticks trade_price = sim_top_price;
+            bool  route_to_engine = true;
+
+            // M8 queue-position model: when latency is engaged, treat the
+            // simulator's synthetic LOB at sim_top_price as having
+            // unlimited queued size with full time priority over MM at
+            // that price. MM is only hit when MM's resting quote is
+            // strictly better than the synthetic top. Without this the
+            // simulator's IOC pass-through sweeps MM at MM's stale price
+            // even when MM is behind the displayed market — produces an
+            // adverse-selection bump (more fills, worse prices) at small
+            // latency that masks the monotone fill-rate-vs-feed-latency
+            // signal real exchange backtests show. M9's queue-reactive
+            // LOB will subsume this with explicit queue modeling.
+            //
+            // Zero-latency case keeps the M6/M7 semantics verbatim so the
+            // binary-log byte-equality + deterministic-replay invariants
+            // survive — the rule applies only when `latency_` is engaged.
+            if (latency_) {
+                Side mm_side = is_buy ? Side::SELL : Side::BUY;
+                if (matching_engine.empty(mm_side)) {
+                    route_to_engine = false;
+                } else {
+                    Ticks mm_best = matching_engine.best_price(mm_side);
+                    bool mm_at_inside = is_buy
+                        ? (mm_best < sim_top_price)
+                        : (mm_best > sim_top_price);
+                    if (mm_at_inside) {
+                        trade_price = mm_best;
+                    } else {
+                        route_to_engine = false;
+                    }
+                }
+            }
+
             uint64_t trade_id = kTradeIdTag | static_cast<uint64_t>(sequence_number + 1);
             auto ts = current_time();
 
@@ -146,30 +282,72 @@ void MarketSimulator::simulate_trade_activity(std::vector<Trade>& trades, std::v
                 ts
             });
 
-            // Aggressor flows through the same add_order entry-point as any
-            // other order — with IOC semantics, residual is discarded
-            // rather than rested (matches the "random market sweep"
-            // intent and unifies the engine API around one path).
-            Order aggressor(kTradeIdTag | trade_id, aggressor_side,
-                            trade_price, trade_size, ts);
-            auto fills = matching_engine.add_order(
-                std::move(aggressor), OrderType::IOC, trade_id).fills;
-            mm_fills.insert(mm_fills.end(), fills.begin(), fills.end());
+            if (route_to_engine) {
+                // Aggressor flows through the same add_order entry-point
+                // as any other order — with IOC semantics, residual is
+                // discarded rather than rested (matches the "random
+                // market sweep" intent and unifies the engine API around
+                // one path).
+                Order aggressor(kTradeIdTag | trade_id, aggressor_side,
+                                trade_price, trade_size, ts);
+                auto fills = matching_engine.add_order(
+                    std::move(aggressor), OrderType::IOC, trade_id).fills;
+                mm_fills.insert(mm_fills.end(), fills.begin(), fills.end());
+            }
         }
     }
 }
 
 OrderStatus MarketSimulator::submit_order(const Order& order, OrderType type) {
-    return matching_engine.add_order(order, type).status;
+    if (!latency_) {
+        return matching_engine.add_order(order, type).status;
+    }
+    // Gateway-ack model: tell MM the order was acknowledged immediately,
+    // but defer landing in the matching engine by an ack-latency sample.
+    // Counterparty trades arriving in (now, now + ack_sample) cannot hit
+    // this order — that's the entire point of the stage.
+    auto& L = *latency_;
+    std::int64_t land_at = L.sim_clock_ns + L.ack.sample(L.rng);
+    L.ack_queue.push_back(PendingOrder{order, type, land_at});
+    return OrderStatus::ACKNOWLEDGED;
 }
 
 bool MarketSimulator::cancel_order(uint64_t order_id) {
+    if (latency_) {
+        // Pending (not-yet-landed) orders are cancellable at the gateway,
+        // matching real-exchange behavior: a not-yet-acked order can be
+        // pulled before it lands.
+        auto& q = latency_->ack_queue;
+        for (auto it = q.begin(); it != q.end(); ++it) {
+            if (it->order.order_id == order_id) {
+                q.erase(it);
+                return true;
+            }
+        }
+    }
     return matching_engine.cancel_order(order_id);
 }
 
 bool MarketSimulator::amend_order(uint64_t order_id, Ticks new_price,
                                   int new_qty,
                                   std::chrono::system_clock::time_point ts) {
+    if (latency_) {
+        // Amend the pending order in-place if it hasn't landed yet. We
+        // resample ack latency for the amended version so the stage
+        // applies symmetrically to amends.
+        auto& q = latency_->ack_queue;
+        for (auto& po : q) {
+            if (po.order.order_id == order_id) {
+                po.order.price        = new_price;
+                po.order.original_qty = new_qty;
+                po.order.leaves_qty   = new_qty;
+                po.order.updated_at   = ts;
+                po.land_time_ns = latency_->sim_clock_ns
+                                + latency_->ack.sample(latency_->rng);
+                return true;
+            }
+        }
+    }
     return matching_engine.amend_order(order_id, new_price, new_qty, ts);
 }
 
