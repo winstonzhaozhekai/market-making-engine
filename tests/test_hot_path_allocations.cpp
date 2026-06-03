@@ -28,6 +28,7 @@
 #include "Order.h"
 #include "include/Instrument.h"
 #include "include/Logger.h"
+#include "include/MarketMakerT.h"
 #include "include/RiskManager.h"
 #include "include/SimulationConfig.h"
 #include "include/SpscLogger.h"
@@ -54,8 +55,10 @@ struct ScopedAllocationCounter {
 };
 
 // Strategy that always emits the same quote → MM should converge to
-// no-op (same px, same size) after the first tick.
-class FixedQuoteStrategy : public Strategy {
+// no-op (same px, same size) after the first tick. `final` so the
+// templated MarketMakerT<FixedQuoteStrategy, LoggerT> hot path
+// devirtualizes compute_quotes.
+class FixedQuoteStrategy final : public Strategy {
 public:
     FixedQuoteStrategy(Ticks bp, Ticks ap, int bs, int as)
         : decision_{} {
@@ -90,11 +93,13 @@ MarketDataEvent make_md(Ticks bid_px, Ticks ask_px, int64_t seq, int64_t ts_ns) 
 }
 
 // Drives the MM hot path through `kMeasured` no-op ticks inside the
-// allocation-counter guard. Caller supplies the Logger so we can exercise
-// the same invariant with NullLogger and with SpscLogger (the M6 closure
-// of C3 proper).
+// allocation-counter guard. Templated on LoggerT so we can exercise the
+// same invariant with NullLogger and with SpscLogger (the M6 closure of
+// C3 proper). MarketMakerT instantiated on the concrete final types
+// here, matching the M7 devirtualized hot path (no virtual dispatch on
+// compute_quotes / on_fill / on_*).
 template <typename LoggerT>
-void run_zero_alloc_loop(std::unique_ptr<LoggerT> logger) {
+void run_zero_alloc_loop(LoggerT& logger) {
     SimulationConfig cfg;
     cfg.seed = 1;
     cfg.iterations = 0;
@@ -105,9 +110,9 @@ void run_zero_alloc_loop(std::unique_ptr<LoggerT> logger) {
     Ticks bp = ins.to_ticks(99.95);
     Ticks ap = ins.to_ticks(100.05);
 
-    MarketMaker mm(ins, RiskConfig{},
-                   std::make_unique<FixedQuoteStrategy>(bp, ap, 5, 5),
-                   std::move(logger));
+    FixedQuoteStrategy strat(bp, ap, 5, 5);
+    mme::MarketMakerT<FixedQuoteStrategy, LoggerT> mm(
+        ins, RiskConfig{}, &strat, &logger);
 
     // Pre-build a fixed batch of MarketDataEvents so the loop body does
     // not allocate via event construction. (Simulator-generated events
@@ -139,7 +144,8 @@ void run_zero_alloc_loop(std::unique_ptr<LoggerT> logger) {
 }
 
 TEST(HotPathAllocations, steady_state_emits_zero_allocations) {
-    run_zero_alloc_loop(std::make_unique<NullLogger>());
+    NullLogger logger;
+    run_zero_alloc_loop(logger);
 }
 
 // C3-proper invariant: routing the same hot path through the SPSC binary
@@ -150,8 +156,8 @@ TEST(HotPathAllocations, spsc_logger_steady_state_zero_allocations) {
     const std::string path = (std::filesystem::temp_directory_path()
                               / "spsc_logger_zero_alloc.bin").string();
     std::remove(path.c_str());
-    auto logger = std::make_unique<SpscLogger>(path);
-    run_zero_alloc_loop(std::move(logger));
+    SpscLogger logger(path);
+    run_zero_alloc_loop(logger);
     std::remove(path.c_str());
 }
 
