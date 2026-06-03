@@ -24,10 +24,27 @@ void MatchingEngine::Level::unlink(OrderNode* n) {
 
 MatchingEngine::MatchingEngine() = default;
 
-MatchingEngine::~MatchingEngine() {
-    for (auto& kv : lookup_) {
-        delete kv.second;
+MatchingEngine::~MatchingEngine() = default;
+// In-flight OrderNodes live in chunks_ which the unique_ptr vector frees
+// in bulk. OrderNode is trivially destructible, so no per-node teardown
+// is needed.
+
+MatchingEngine::OrderNode* MatchingEngine::pool_alloc() {
+    if (free_head_) {
+        OrderNode* n = free_head_;
+        free_head_ = n->next;
+        return n;
     }
+    if (chunks_.empty() || bump_pos_ == kChunkNodes) {
+        chunks_.push_back(std::make_unique<Chunk>());
+        bump_pos_ = 0;
+    }
+    return &chunks_.back()->nodes[bump_pos_++];
+}
+
+void MatchingEngine::pool_dealloc(OrderNode* n) {
+    n->next = free_head_;
+    free_head_ = n;
 }
 
 bool MatchingEngine::would_cross(Side incoming_side, Ticks price) const {
@@ -96,7 +113,7 @@ int MatchingEngine::match_against_book(Side aggressor_side, Ticks limit_price,
                     // see leaves_qty==0 and decrement by 0.
                     lvl.unlink(head);
                     lookup_.erase(head->order_id);
-                    delete head;
+                    pool_dealloc(head);
                 }
             }
             if (lvl.empty()) it = asks_.erase(it);
@@ -131,7 +148,7 @@ int MatchingEngine::match_against_book(Side aggressor_side, Ticks limit_price,
                 if (head->leaves_qty == 0) {
                     lvl.unlink(head);
                     lookup_.erase(head->order_id);
-                    delete head;
+                    pool_dealloc(head);
                 }
             }
             if (lvl.empty()) it = bids_.erase(it);
@@ -156,7 +173,8 @@ SubmitResult MatchingEngine::add_order(Order order, OrderType type,
         if (marketable)                      return result;  // REJECTED
         if (lookup_.count(order.order_id))   return result;  // duplicate id
 
-        auto* n = new OrderNode{
+        OrderNode* n = pool_alloc();
+        *n = OrderNode{
             order.order_id, order.side, type, order.price,
             order.original_qty, order.leaves_qty,
             OrderStatus::ACKNOWLEDGED,
@@ -194,7 +212,8 @@ SubmitResult MatchingEngine::add_order(Order order, OrderType type,
         return result;
     }
 
-    auto* n = new OrderNode{
+    OrderNode* n = pool_alloc();
+    *n = OrderNode{
         order.order_id, order.side, type, order.price,
         order.original_qty, remaining,
         result.fills.empty() ? OrderStatus::ACKNOWLEDGED
@@ -214,7 +233,7 @@ bool MatchingEngine::cancel_order(uint64_t id) {
     OrderNode* n = it->second;
     unlink_node_from_book(n);
     lookup_.erase(it);
-    delete n;
+    pool_dealloc(n);
     return true;
 }
 

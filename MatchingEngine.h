@@ -4,11 +4,13 @@
 #include "Order.h"
 #include "include/Instrument.h"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -26,9 +28,12 @@ struct SubmitResult {
 //   Level         : intrusive doubly-linked FIFO of OrderNodes at one price
 //   lookup_       : unordered_map<order_id, OrderNode*> — O(1) handle
 //
-// Memory: OrderNodes are heap-allocated on rest, deleted on cancel/full
-// fill. The engine owns every node it holds a pointer to. (Arena/pool
-// allocation is M5 work.)
+// Memory: OrderNodes are slab-allocated in fixed 4096-node chunks owned
+// by the engine; freed slots are threaded into a singly-linked freelist
+// via the node's next pointer (zero space overhead — a slot is either
+// in-book/lookup or in the freelist, never both). Chunks grow
+// geometrically; the engine's dtor frees them in bulk. No per-rest or
+// per-cancel heap traffic.
 class MatchingEngine {
 public:
     MatchingEngine();
@@ -108,6 +113,16 @@ private:
     BidBook bids_;
     AskBook asks_;
     std::unordered_map<uint64_t, OrderNode*> lookup_;
+
+    // ---- Slab allocator for OrderNode ----------------------------------
+    static constexpr std::size_t kChunkNodes = 4096;
+    struct Chunk { std::array<OrderNode, kChunkNodes> nodes; };
+    std::vector<std::unique_ptr<Chunk>> chunks_;
+    OrderNode*  free_head_ = nullptr;
+    std::size_t bump_pos_  = 0;
+
+    OrderNode* pool_alloc();
+    void       pool_dealloc(OrderNode* n);
 
     bool would_cross(Side incoming_side, Ticks price) const;
 
