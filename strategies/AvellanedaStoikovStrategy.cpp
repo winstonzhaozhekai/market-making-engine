@@ -5,6 +5,7 @@
 
 AvellanedaStoikovStrategy::AvellanedaStoikovStrategy(const AvellanedaStoikovConfig& cfg)
     : config_(cfg),
+      gk_log_term_((2.0 / cfg.gamma) * std::log(1.0 + cfg.gamma / cfg.kappa)),
       vol_estimator_(cfg.vol_window),
       ofi_estimator_(cfg.ofi_window) {}
 
@@ -19,13 +20,12 @@ QuoteDecision AvellanedaStoikovStrategy::compute_quotes(const StrategySnapshot& 
     double q = static_cast<double>(snap.position);
     double q_max = static_cast<double>(snap.max_position);
     double gamma = config_.gamma;
-    double kappa = config_.kappa;
     double T = config_.T;
 
     double sigma2 = sigma * sigma;
     double reservation = snap.mid_price - q * gamma * sigma2 * T;
 
-    double optimal_spread = gamma * sigma2 * T + (2.0 / gamma) * std::log(1.0 + gamma / kappa);
+    double optimal_spread = gamma * sigma2 * T + gk_log_term_;
 
     optimal_spread *= (1.0 + config_.ofi_spread_factor * std::abs(ofi));
 

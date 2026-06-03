@@ -32,6 +32,11 @@ public:
 
 private:
     AvellanedaStoikovConfig config_;
+    // Precomputed at construction: (2/γ)·log(1 + γ/κ), the gamma/kappa
+    // term of the A-S spread formula. Constant for the life of the
+    // strategy since gamma and kappa are config-fixed for v1 (online
+    // kappa estimation is post-v1).
+    double            gk_log_term_;
     RollingVolatility vol_estimator_;
     RollingOFI ofi_estimator_;
 };
