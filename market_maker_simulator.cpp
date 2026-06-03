@@ -51,6 +51,16 @@ SimulationMode parse_mode(const std::string& value) {
     throw std::invalid_argument("Invalid --mode value: " + value + " (expected simulate|replay)");
 }
 
+mme::LatencyDistribution parse_latency_dist(const std::string& value) {
+    if (value == "zero")        return mme::LatencyDistribution::Zero;
+    if (value == "constant")    return mme::LatencyDistribution::Constant;
+    if (value == "exponential") return mme::LatencyDistribution::Exponential;
+    if (value == "lognormal")   return mme::LatencyDistribution::LogNormal;
+    throw std::invalid_argument(
+        "Invalid latency distribution: " + value +
+        " (expected zero|constant|exponential|lognormal)");
+}
+
 void print_usage() {
     std::cout << "Usage: ./market_maker_simulator [options]\n"
               << "Options:\n"
@@ -58,13 +68,24 @@ void print_usage() {
               << "  --strategy <name>   heuristic|avellaneda-stoikov (default: heuristic)\n"
               << "  --seed <n>          RNG seed (default: 42)\n"
               << "  --iterations <n>    Number of events to process (default: 1000)\n"
-              << "  --latency-ms <n>    Per-event latency in ms (default: 10)\n"
               << "  --event-log <path>  Write generated MD events to binary log\n"
               << "  --replay <path>     Compatibility alias for --mode replay + replay path\n"
               << "  --engine-log <path> Route engine alerts through SPSC binary logger\n"
               << "                      (default: human-readable stdout output)\n"
               << "  --quiet             Suppress per-event output\n"
-              << "  --help              Show this help text\n";
+              << "  --help              Show this help text\n"
+              << "\n"
+              << "Per-stage latency (M8): all default to zero (byte-equal replay path).\n"
+              << "  --feed-latency-dist       <zero|constant|exponential|lognormal>\n"
+              << "  --feed-latency-mean-ns    <int>\n"
+              << "  --feed-latency-stddev-ns  <int>  (LogNormal only)\n"
+              << "  --ack-latency-dist        <...>\n"
+              << "  --ack-latency-mean-ns     <int>\n"
+              << "  --ack-latency-stddev-ns   <int>\n"
+              << "  --matching-latency-dist   <...>\n"
+              << "  --matching-latency-mean-ns   <int>\n"
+              << "  --matching-latency-stddev-ns <int>\n"
+              << "  --latency-seed            <uint>  RNG seed for latency draws (default: 0xC0FFEE)\n";
 }
 
 bool read_arg_value(int argc, char* argv[], int& i, std::string& out) {
@@ -107,11 +128,56 @@ SimulationConfig parse_args(int argc, char* argv[]) {
                 throw std::invalid_argument("--iterations requires a value");
             }
             config.iterations = std::stoi(value);
-        } else if (arg == "--latency-ms") {
+        } else if (arg == "--feed-latency-dist") {
             if (!read_arg_value(argc, argv, i, value)) {
-                throw std::invalid_argument("--latency-ms requires a value");
+                throw std::invalid_argument("--feed-latency-dist requires a value");
             }
-            config.latency_ms = std::stoi(value);
+            config.feed_latency.kind = parse_latency_dist(value);
+        } else if (arg == "--feed-latency-mean-ns") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--feed-latency-mean-ns requires a value");
+            }
+            config.feed_latency.mean_ns = std::stoll(value);
+        } else if (arg == "--feed-latency-stddev-ns") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--feed-latency-stddev-ns requires a value");
+            }
+            config.feed_latency.stddev_ns = std::stoll(value);
+        } else if (arg == "--ack-latency-dist") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--ack-latency-dist requires a value");
+            }
+            config.ack_latency.kind = parse_latency_dist(value);
+        } else if (arg == "--ack-latency-mean-ns") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--ack-latency-mean-ns requires a value");
+            }
+            config.ack_latency.mean_ns = std::stoll(value);
+        } else if (arg == "--ack-latency-stddev-ns") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--ack-latency-stddev-ns requires a value");
+            }
+            config.ack_latency.stddev_ns = std::stoll(value);
+        } else if (arg == "--matching-latency-dist") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--matching-latency-dist requires a value");
+            }
+            config.matching_latency.kind = parse_latency_dist(value);
+        } else if (arg == "--matching-latency-mean-ns") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--matching-latency-mean-ns requires a value");
+            }
+            config.matching_latency.mean_ns = std::stoll(value);
+        } else if (arg == "--matching-latency-stddev-ns") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--matching-latency-stddev-ns requires a value");
+            }
+            config.matching_latency.stddev_ns = std::stoll(value);
+        } else if (arg == "--latency-seed") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--latency-seed requires a value");
+            }
+            config.latency_seed = static_cast<std::uint32_t>(std::stoul(value));
         } else if (arg == "--event-log") {
             if (!read_arg_value(argc, argv, i, value)) {
                 throw std::invalid_argument("--event-log requires a value");
@@ -167,10 +233,26 @@ int main(int argc, char* argv[]) {
         std::cerr << "--iterations must be > 0\n";
         return 1;
     }
-    if (config.latency_ms < 0) {
-        std::cerr << "--latency-ms must be >= 0\n";
-        return 1;
-    }
+    auto validate_stage = [](const char* name, const mme::StageLatencyConfig& s) -> bool {
+        if (s.mean_ns < 0) {
+            std::cerr << "--" << name << "-latency-mean-ns must be >= 0\n";
+            return false;
+        }
+        if (s.stddev_ns < 0) {
+            std::cerr << "--" << name << "-latency-stddev-ns must be >= 0\n";
+            return false;
+        }
+        if ((s.kind == mme::LatencyDistribution::Exponential ||
+             s.kind == mme::LatencyDistribution::LogNormal) && s.mean_ns == 0) {
+            std::cerr << "--" << name << "-latency-dist requires --"
+                      << name << "-latency-mean-ns > 0\n";
+            return false;
+        }
+        return true;
+    };
+    if (!validate_stage("feed",     config.feed_latency))     return 1;
+    if (!validate_stage("ack",      config.ack_latency))      return 1;
+    if (!validate_stage("matching", config.matching_latency)) return 1;
     if (config.mode == SimulationMode::Replay && config.replay_log_path.empty()) {
         std::cerr << "--mode replay requires --replay <path>\n";
         return 1;

@@ -146,7 +146,6 @@ RunCapture run_capture(const SimulationConfig& config, int events_to_process) {
 SimulationConfig base_config() {
     SimulationConfig c;
     c.iterations = 200;
-    c.latency_ms = 0;
     return c;
 }
 

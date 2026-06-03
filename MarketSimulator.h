@@ -16,7 +16,6 @@ class SpscMdLogger;
 
 class MarketSimulator {
 public:
-    MarketSimulator(std::string instrument_, double init_price_, double spread_, double volatility_, int latency_ms_);
     explicit MarketSimulator(const SimulationConfig& config);
     ~MarketSimulator();
     MarketDataEvent generate_event();
@@ -38,7 +37,6 @@ private:
     double mid_price_dollars;
     double spread_dollars;
     double volatility;
-    int latency_ms;
     std::vector<OrderLevel> bid_levels_;
     std::vector<OrderLevel> ask_levels_;
     MatchingEngine matching_engine;

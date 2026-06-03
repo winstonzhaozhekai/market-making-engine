@@ -83,7 +83,6 @@ TEST(BinaryLogRoundTrip, WriteReadRewriteByteEqual) {
     SimulationConfig cfg;
     cfg.seed = 4242;
     cfg.iterations = 500;
-    cfg.latency_ms = 0;
     cfg.quiet = true;
 
     // Pass 1: simulate + log to A.

@@ -161,7 +161,6 @@ WsSession::WsSession(tcp::socket&& socket, WsSessionConfig config, CloseCallback
       inactivity_timer_(executor_),
       next_strategy_name_(config.strategy_name.empty() ? "heuristic" : config.strategy_name) {
     next_simulation_config_.iterations = config_.simulation_iterations;
-    next_simulation_config_.latency_ms = config_.simulation_latency_ms;
     next_simulation_config_.seed = config_.simulation_seed;
     next_simulation_config_.quiet = true;
 }
@@ -337,6 +336,29 @@ bool WsSession::handle_set_command(const std::string& message) {
         }
     };
 
+    auto parse_int64 = [](const std::string& raw, std::int64_t& out) {
+        std::size_t idx = 0;
+        try {
+            const long long value = std::stoll(raw, &idx);
+            if (idx != raw.size()) {
+                return false;
+            }
+            out = static_cast<std::int64_t>(value);
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+
+    auto parse_latency_dist = [](const std::string& raw,
+                                 mme::LatencyDistribution& out) {
+        if (raw == "zero")        { out = mme::LatencyDistribution::Zero;        return true; }
+        if (raw == "constant")    { out = mme::LatencyDistribution::Constant;    return true; }
+        if (raw == "exponential") { out = mme::LatencyDistribution::Exponential; return true; }
+        if (raw == "lognormal")   { out = mme::LatencyDistribution::LogNormal;   return true; }
+        return false;
+    };
+
     auto send_config_ack = [this](const std::string& key, const std::string& value) {
         enqueue_outbound_message(make_status_json("ok", "config_updated:" + key + "=" + value));
     };
@@ -364,14 +386,105 @@ bool WsSession::handle_set_command(const std::string& message) {
         return true;
     }
 
-    if (extract_value("set_latency_ms:", value)) {
-        int latency_ms = 0;
-        if (!parse_int(value, latency_ms) || latency_ms < 0) {
-            enqueue_outbound_message(make_error_json("invalid_latency_ms"));
+    // Per-stage latency (M8). Each stage takes a distribution kind, a mean,
+    // and a stddev (only consulted by LogNormal). The frontend's single
+    // legacy "latency" slider now drives `set_feed_latency_mean_ns`.
+    auto handle_stage_mean = [&](const char* prefix,
+                                 mme::StageLatencyConfig& cfg,
+                                 const char* err) {
+        std::int64_t v = 0;
+        if (!parse_int64(value, v) || v < 0) {
+            enqueue_outbound_message(make_error_json(err));
+            return;
+        }
+        cfg.mean_ns = v;
+        send_config_ack(prefix, value);
+    };
+    auto handle_stage_stddev = [&](const char* prefix,
+                                   mme::StageLatencyConfig& cfg,
+                                   const char* err) {
+        std::int64_t v = 0;
+        if (!parse_int64(value, v) || v < 0) {
+            enqueue_outbound_message(make_error_json(err));
+            return;
+        }
+        cfg.stddev_ns = v;
+        send_config_ack(prefix, value);
+    };
+    auto handle_stage_dist = [&](const char* prefix,
+                                 mme::StageLatencyConfig& cfg,
+                                 const char* err) {
+        mme::LatencyDistribution d;
+        if (!parse_latency_dist(value, d)) {
+            enqueue_outbound_message(make_error_json(err));
+            return;
+        }
+        cfg.kind = d;
+        send_config_ack(prefix, value);
+    };
+
+    if (extract_value("set_feed_latency_mean_ns:", value)) {
+        handle_stage_mean("feed_latency_mean_ns",
+                          next_simulation_config_.feed_latency,
+                          "invalid_feed_latency_mean_ns");
+        return true;
+    }
+    if (extract_value("set_feed_latency_stddev_ns:", value)) {
+        handle_stage_stddev("feed_latency_stddev_ns",
+                            next_simulation_config_.feed_latency,
+                            "invalid_feed_latency_stddev_ns");
+        return true;
+    }
+    if (extract_value("set_feed_latency_dist:", value)) {
+        handle_stage_dist("feed_latency_dist",
+                          next_simulation_config_.feed_latency,
+                          "invalid_feed_latency_dist");
+        return true;
+    }
+    if (extract_value("set_ack_latency_mean_ns:", value)) {
+        handle_stage_mean("ack_latency_mean_ns",
+                          next_simulation_config_.ack_latency,
+                          "invalid_ack_latency_mean_ns");
+        return true;
+    }
+    if (extract_value("set_ack_latency_stddev_ns:", value)) {
+        handle_stage_stddev("ack_latency_stddev_ns",
+                            next_simulation_config_.ack_latency,
+                            "invalid_ack_latency_stddev_ns");
+        return true;
+    }
+    if (extract_value("set_ack_latency_dist:", value)) {
+        handle_stage_dist("ack_latency_dist",
+                          next_simulation_config_.ack_latency,
+                          "invalid_ack_latency_dist");
+        return true;
+    }
+    if (extract_value("set_matching_latency_mean_ns:", value)) {
+        handle_stage_mean("matching_latency_mean_ns",
+                          next_simulation_config_.matching_latency,
+                          "invalid_matching_latency_mean_ns");
+        return true;
+    }
+    if (extract_value("set_matching_latency_stddev_ns:", value)) {
+        handle_stage_stddev("matching_latency_stddev_ns",
+                            next_simulation_config_.matching_latency,
+                            "invalid_matching_latency_stddev_ns");
+        return true;
+    }
+    if (extract_value("set_matching_latency_dist:", value)) {
+        handle_stage_dist("matching_latency_dist",
+                          next_simulation_config_.matching_latency,
+                          "invalid_matching_latency_dist");
+        return true;
+    }
+    if (extract_value("set_latency_seed:", value)) {
+        std::uint32_t seed_v = 0;
+        if (!parse_uint32(value, seed_v)) {
+            enqueue_outbound_message(make_error_json("invalid_latency_seed"));
             return true;
         }
-        next_simulation_config_.latency_ms = latency_ms;
-        send_config_ack("latency_ms", value);
+        next_simulation_config_.latency_seed = seed_v;
+        send_config_ack("latency_seed", value);
         return true;
     }
 

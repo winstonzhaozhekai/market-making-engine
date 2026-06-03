@@ -103,7 +103,6 @@ void run_zero_alloc_loop(LoggerT& logger) {
     SimulationConfig cfg;
     cfg.seed = 1;
     cfg.iterations = 0;
-    cfg.latency_ms = 0;
     cfg.quiet = true;
     MarketSimulator sim(cfg);
     Instrument ins = sim.instrument_meta();

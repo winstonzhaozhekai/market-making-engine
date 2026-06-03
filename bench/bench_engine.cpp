@@ -34,7 +34,6 @@ static void run_bench(int events, uint32_t seed,
     SimulationConfig config;
     config.seed = seed;
     config.iterations = events;
-    config.latency_ms = 0;
     config.quiet = true;
 
     MarketSimulator simulator(config);

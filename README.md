@@ -23,7 +23,7 @@ cmake --preset release && cmake --build --preset release
 
 ## What Is Implemented
 
-- Deterministic simulation config and seeded runs (`--seed`, `--iterations`, `--latency-ms`)
+- Deterministic simulation config and seeded runs (`--seed`, `--iterations`, per-stage `--feed-latency-*` / `--ack-latency-*` / `--matching-latency-*`, `--latency-seed`)
 - Replay mode from event log (`--mode replay --replay <path>`)
 - Matching engine with price-time priority, partial/full fills, cancel flow
 - Order lifecycle states (`NEW`, `ACKNOWLEDGED`, `PARTIALLY_FILLED`, `FILLED`, `CANCELED`, `REJECTED`)
@@ -101,23 +101,32 @@ Key options:
 - `--strategy heuristic|avellaneda-stoikov`
 - `--seed <n>`
 - `--iterations <n>`
-- `--latency-ms <n>`
+- Per-stage latency (M8): `--feed-latency-dist {zero|constant|exponential|lognormal}`, `--feed-latency-mean-ns <int>`, `--feed-latency-stddev-ns <int>`, and the same triplet for `--ack-latency-*` and `--matching-latency-*`. All default to `zero` (byte-equal deterministic-replay path).
+- `--latency-seed <uint>` — RNG seed for latency draws, independent from `--seed`
 - `--event-log <path>`
 - `--replay <path>`
-- `--binary-log <path>`
+- `--engine-log <path>`
 - `--quiet`
 
-Example deterministic run:
+Example deterministic run (all latencies zero — byte-equal replay path):
 
 ```bash
-./build/release/market_maker_simulator --strategy heuristic --seed 42 --iterations 1000 --latency-ms 0 --quiet
+./build/release/market_maker_simulator --strategy heuristic --seed 42 --iterations 1000 --quiet
 ```
 
 Event log + replay:
 
 ```bash
-./build/release/market_maker_simulator --seed 7 --iterations 1000 --latency-ms 0 --event-log /tmp/mm.log --quiet
-./build/release/market_maker_simulator --mode replay --replay /tmp/mm.log --iterations 1000 --latency-ms 0 --quiet
+./build/release/market_maker_simulator --seed 7 --iterations 1000 --event-log /tmp/mm.log --quiet
+./build/release/market_maker_simulator --mode replay --replay /tmp/mm.log --iterations 1000 --quiet
+```
+
+Sweep feed latency (lognormal, 50 µs mean, 25 µs stddev) to see fill-rate degrade:
+
+```bash
+./build/release/market_maker_simulator --strategy heuristic --seed 42 --iterations 100000 \
+    --feed-latency-dist lognormal --feed-latency-mean-ns 50000 --feed-latency-stddev-ns 25000 \
+    --latency-seed 0xC0FFEE --quiet
 ```
 
 ### WebSocket server + frontend
@@ -146,8 +155,12 @@ Inbound commands:
 - `enable_overlap` / `disable_overlap`
 - `set_seed:<uint32>`
 - `set_iterations:<int>`
-- `set_latency_ms:<int>`
 - `set_strategy:heuristic|avellaneda-stoikov`
+- Per-stage latency (M8) — for each of `feed`, `ack`, `matching`:
+  - `set_{stage}_latency_dist:zero|constant|exponential|lognormal`
+  - `set_{stage}_latency_mean_ns:<int64>`
+  - `set_{stage}_latency_stddev_ns:<int64>`
+- `set_latency_seed:<uint32>`
 - `set_max_net_position:<int>`
 - `set_max_notional_exposure:<double>`
 - `set_max_drawdown:<double>`

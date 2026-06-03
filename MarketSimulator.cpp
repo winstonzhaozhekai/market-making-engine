@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 
 namespace {
@@ -18,21 +17,6 @@ std::chrono::system_clock::time_point from_millis(int64_t ms) {
 }
 } // namespace
 
-MarketSimulator::MarketSimulator(std::string instrument_, double init_price_, double spread_, double volatility_, int latency_ms_)
-    : MarketSimulator(SimulationConfig{
-          std::move(instrument_),
-          0.01,
-          init_price_,
-          spread_,
-          volatility_,
-          latency_ms_,
-          1000,
-          42,
-          "",
-          "",
-          SimulationMode::Simulate,
-          false}) {}
-
 MarketSimulator::MarketSimulator(const SimulationConfig& cfg)
     : config(cfg),
       instrument_(cfg.tick_size),
@@ -40,7 +24,6 @@ MarketSimulator::MarketSimulator(const SimulationConfig& cfg)
       mid_price_dollars(cfg.initial_price),
       spread_dollars(cfg.spread),
       volatility(cfg.volatility),
-      latency_ms(cfg.latency_ms),
       rng(cfg.seed),
       sequence_number(0),
       simulation_clock(from_millis(kBaseTimestampMs + static_cast<int64_t>(cfg.seed) * 1000)),
@@ -101,9 +84,6 @@ MarketDataEvent MarketSimulator::generate_event() {
     simulate_trade_activity(trades_buf_, mm_fills_buf_);
 
     auto event_creation_time = current_time();
-    if (latency_ms > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(latency_ms));
-    }
 
     std::vector<PartialFillEvent> partial_fills;
     for (const auto& fill : mm_fills_buf_) {

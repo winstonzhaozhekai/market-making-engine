@@ -8,7 +8,7 @@ const DEFAULT_RUN_CONFIG = {
   seed: '42',
   strategy: 'heuristic',
   iterations: '1000',
-  latencyMs: '10',
+  feedLatencyUs: '0',
   maxNetPosition: '1000',
   maxNotionalExposure: '500000',
   maxDrawdown: '10000',
@@ -32,7 +32,7 @@ function normalizeRunConfig(config) {
     seed: Math.max(0, Math.floor(toFiniteNumber(config.seed, 42))),
     strategy: config.strategy === 'avellaneda-stoikov' ? 'avellaneda-stoikov' : 'heuristic',
     iterations: Math.max(1, Math.floor(toFiniteNumber(config.iterations, 1000))),
-    latencyMs: Math.max(0, Math.floor(toFiniteNumber(config.latencyMs, 10))),
+    feedLatencyUs: Math.max(0, Math.floor(toFiniteNumber(config.feedLatencyUs, 0))),
     maxNetPosition: Math.max(1, Math.floor(toFiniteNumber(config.maxNetPosition, 1000))),
     maxNotionalExposure: Math.max(1, toFiniteNumber(config.maxNotionalExposure, 500000)),
     maxDrawdown: Math.max(1, toFiniteNumber(config.maxDrawdown, 10000)),
@@ -111,7 +111,11 @@ function App() {
     wsRef.current.send(`set_seed:${config.seed}`);
     wsRef.current.send(`set_strategy:${config.strategy}`);
     wsRef.current.send(`set_iterations:${config.iterations}`);
-    wsRef.current.send(`set_latency_ms:${config.latencyMs}`);
+    // Single legacy slider drives feed latency only (constant distribution).
+    // ack/matching default to zero — dashboard surfaces them in a follow-up.
+    const feedLatencyNs = config.feedLatencyUs * 1000;
+    wsRef.current.send(`set_feed_latency_dist:${feedLatencyNs > 0 ? 'constant' : 'zero'}`);
+    wsRef.current.send(`set_feed_latency_mean_ns:${feedLatencyNs}`);
     wsRef.current.send(`set_max_net_position:${config.maxNetPosition}`);
     wsRef.current.send(`set_max_notional_exposure:${config.maxNotionalExposure}`);
     wsRef.current.send(`set_max_drawdown:${config.maxDrawdown}`);

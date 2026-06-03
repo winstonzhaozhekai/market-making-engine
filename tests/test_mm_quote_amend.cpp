@@ -34,7 +34,6 @@ struct Fixture {
     Fixture() {
         cfg.seed = 1;
         cfg.iterations = 0;
-        cfg.latency_ms = 0;
         cfg.quiet = true;
         sim = std::make_unique<MarketSimulator>(cfg);
         ins = sim->instrument_meta();

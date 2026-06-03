@@ -79,7 +79,6 @@ bool complete_outbound_write(OutboundQueueState& state);
 struct WsSessionConfig {
     bool allow_overlapping_simulations = false;
     int simulation_iterations = 1000;
-    int simulation_latency_ms = 10;
     uint32_t simulation_seed = 42;
     std::string strategy_name = "heuristic";
     std::chrono::seconds heartbeat_interval{5};

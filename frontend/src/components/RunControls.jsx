@@ -8,7 +8,7 @@ const STRATEGY_OPTIONS = [
 const FIELDS = [
   { key: 'seed', label: 'Seed', type: 'number', step: 1 },
   { key: 'iterations', label: 'Run Length', type: 'number', step: 1 },
-  { key: 'latencyMs', label: 'Latency (ms)', type: 'number', step: 1 },
+  { key: 'feedLatencyUs', label: 'Feed Latency (µs)', type: 'number', step: 1 },
   { key: 'maxNetPosition', label: 'Max Net Position', type: 'number', step: 1 },
   { key: 'maxNotionalExposure', label: 'Max Notional', type: 'number', step: '0.01' },
   { key: 'maxDrawdown', label: 'Max Drawdown', type: 'number', step: '0.01' },

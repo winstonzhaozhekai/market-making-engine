@@ -36,6 +36,8 @@
 #include <random>
 #include <vector>
 
+#include "LatencyConfig.h"
+
 namespace mme {
 
 // ---- Scheduled event -------------------------------------------------------
@@ -117,20 +119,8 @@ private:
     std::int64_t      now_ns_   = 0;
 };
 
-// ---- Per-stage latency samplers -------------------------------------------
-
-enum class LatencyDistribution : std::uint8_t {
-    Zero,         // always 0 ns           — byte-equality fast-path sentinel
-    Constant,     // always mean_ns
-    Exponential,  // rate = 1/mean_ns      (memoryless inter-arrival shape)
-    LogNormal,    // (mean_ns, stddev_ns)  in real space, mapped to log space
-};
-
-struct StageLatencyConfig {
-    LatencyDistribution kind      = LatencyDistribution::Zero;
-    std::int64_t        mean_ns   = 0;
-    std::int64_t        stddev_ns = 0;   // ignored unless kind == LogNormal
-};
+// ---- Per-stage latency sampler --------------------------------------------
+// (LatencyDistribution + StageLatencyConfig live in LatencyConfig.h)
 
 class StageSampler {
 public:
