@@ -3,9 +3,9 @@
 
 #include "Accounting.h"
 #include "Instrument.h"
+#include "RingBuffer.h"
 #include "../MarketDataEvent.h"
 #include <vector>
-#include <deque>
 #include <chrono>
 
 enum class RiskState { Normal, Warning, Breached, KillSwitch };
@@ -73,8 +73,8 @@ private:
     double drawdown_ = 0.0;
     bool hwm_initialized_ = false;
 
-    std::deque<std::chrono::system_clock::time_point> quote_timestamps_;
-    std::deque<std::chrono::system_clock::time_point> cancel_timestamps_;
+    RingBuffer<std::chrono::system_clock::time_point> quote_timestamps_;
+    RingBuffer<std::chrono::system_clock::time_point> cancel_timestamps_;
 
     std::chrono::system_clock::time_point breach_timestamp_;
     bool breach_timestamp_set_ = false;

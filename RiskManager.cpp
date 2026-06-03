@@ -5,8 +5,22 @@
 RiskManager::RiskManager(const RiskConfig& cfg)
     : RiskManager(Instrument{}, cfg) {}
 
+namespace {
+// Size the rate-window rings to hold a full window's worth of events at
+// the configured peak rate, with 2x headroom for bursts. The risk
+// manager fires Breached well before the buffer fills, so the headroom
+// is for safety only — under nominal operation we never approach it.
+std::size_t window_capacity(double rate_per_sec, double window_sec) {
+    double events = rate_per_sec * window_sec * 2.0;
+    return events < 1.0 ? std::size_t{2} : static_cast<std::size_t>(events) + 1;
+}
+}
+
 RiskManager::RiskManager(Instrument instrument, const RiskConfig& cfg)
-    : instrument_(instrument), config_(cfg) {
+    : instrument_(instrument),
+      config_(cfg),
+      quote_timestamps_(window_capacity(cfg.max_quotes_per_second, cfg.rate_window_seconds)),
+      cancel_timestamps_(window_capacity(cfg.max_cancels_per_second, cfg.rate_window_seconds)) {
     last_results_.reserve(7);
 }
 
