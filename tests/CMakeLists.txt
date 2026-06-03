@@ -30,3 +30,15 @@ mme_add_test(test_spsc_logger)
 mme_add_test(test_binary_log_roundtrip mme_core)
 mme_add_test(test_determinism         mme_core)
 mme_add_test(test_ws_protocol         mme_ws)
+
+# M7 done-when: release-build templated MarketMakerT<S,L> hot path has no
+# indirect-call (vtable dispatch) instructions inside the noinline
+# tick_once<...> wrappers in bench_engine. Release-only; the script is a
+# no-op pass on non-Linux/macOS or non-x86_64/arm64 hosts.
+if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    add_test(
+        NAME M7_no_virtual_dispatch
+        COMMAND ${CMAKE_SOURCE_DIR}/tests/check_no_virtual_dispatch.sh
+                $<TARGET_FILE:bench_engine>
+    )
+endif()
