@@ -70,6 +70,9 @@ target_link_libraries(WebSocketServer PRIVATE mme_ws mme_warnings)
 add_executable(bench_engine bench/bench_engine.cpp)
 target_link_libraries(bench_engine PRIVATE mme_core mme_warnings)
 
+add_executable(bench_latency_sweep bench/bench_latency_sweep.cpp)
+target_link_libraries(bench_latency_sweep PRIVATE mme_core mme_warnings)
+
 # ---- Tests -----------------------------------------------------------------
 
 enable_testing()

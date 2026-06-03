@@ -68,6 +68,9 @@ void print_usage() {
               << "  --strategy <name>   heuristic|avellaneda-stoikov (default: heuristic)\n"
               << "  --seed <n>          RNG seed (default: 42)\n"
               << "  --iterations <n>    Number of events to process (default: 1000)\n"
+              << "  --volatility <f>    Per-event mid noise stddev in dollars (default: 0.5)\n"
+              << "  --spread <f>        Synthetic LOB spread in dollars (default: 0.1)\n"
+              << "  --initial-price <f> Initial mid price in dollars (default: 100.0)\n"
               << "  --event-log <path>  Write generated MD events to binary log\n"
               << "  --replay <path>     Compatibility alias for --mode replay + replay path\n"
               << "  --engine-log <path> Route engine alerts through SPSC binary logger\n"
@@ -128,6 +131,21 @@ SimulationConfig parse_args(int argc, char* argv[]) {
                 throw std::invalid_argument("--iterations requires a value");
             }
             config.iterations = std::stoi(value);
+        } else if (arg == "--volatility") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--volatility requires a value");
+            }
+            config.volatility = std::stod(value);
+        } else if (arg == "--spread") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--spread requires a value");
+            }
+            config.spread = std::stod(value);
+        } else if (arg == "--initial-price") {
+            if (!read_arg_value(argc, argv, i, value)) {
+                throw std::invalid_argument("--initial-price requires a value");
+            }
+            config.initial_price = std::stod(value);
         } else if (arg == "--feed-latency-dist") {
             if (!read_arg_value(argc, argv, i, value)) {
                 throw std::invalid_argument("--feed-latency-dist requires a value");

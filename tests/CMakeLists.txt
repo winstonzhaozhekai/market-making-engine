@@ -30,6 +30,7 @@ mme_add_test(test_spsc_logger)
 mme_add_test(test_latency_scheduler)
 mme_add_test(test_binary_log_roundtrip mme_core)
 mme_add_test(test_determinism         mme_core)
+mme_add_test(test_latency_monotonicity mme_core)
 mme_add_test(test_ws_protocol         mme_ws)
 
 # M7 done-when: release-build templated MarketMakerT<S,L> hot path has no
