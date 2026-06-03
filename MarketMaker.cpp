@@ -104,8 +104,6 @@ void MarketMaker::cancel_all_orders(MarketSimulator& simulator, std::chrono::sys
 }
 
 void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simulator) {
-    cancel_all_orders(simulator, md.timestamp);
-
     Ticks best_bid = md.bid_levels[0].price;
     Ticks best_ask = md.ask_levels[0].price;
     double mid_dollars = instrument_.to_price(best_bid + best_ask) / 2.0;
@@ -126,6 +124,7 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     QuoteDecision decision = strategy_->compute_quotes(snap);
 
     if (!decision.should_quote) {
+        cancel_all_orders(simulator, md.timestamp);
         return;
     }
 
@@ -133,20 +132,42 @@ void MarketMaker::update_quotes(const MarketDataEvent& md, MarketSimulator& simu
     int bid_size = std::max(cfg.min_quote_size, std::min(decision.bid_size, cfg.max_quote_size));
     int ask_size = std::max(cfg.min_quote_size, std::min(decision.ask_size, cfg.max_quote_size));
 
-    uint64_t bid_id = generate_order_id();
-    Order bid_order(bid_id, Side::BUY, decision.bid_price, bid_size, md.timestamp);
-    if (simulator.submit_order(bid_order, OrderType::POST_ONLY) == OrderStatus::ACKNOWLEDGED) {
-        bid_order.status = OrderStatus::ACKNOWLEDGED;
-        active_orders[side_index(Side::BUY)] = bid_order;
-        risk_manager_.record_quote(md.timestamp);
+    apply_quote(Side::BUY,  decision.bid_price, bid_size, simulator, md.timestamp);
+    apply_quote(Side::SELL, decision.ask_price, ask_size, simulator, md.timestamp);
+}
+
+void MarketMaker::apply_quote(Side side, Ticks price, int qty,
+                              MarketSimulator& simulator,
+                              std::chrono::system_clock::time_point ts) {
+    auto& slot = active_orders[side_index(side)];
+
+    if (!slot) {
+        uint64_t id = generate_order_id();
+        Order order(id, side, price, qty, ts);
+        if (simulator.submit_order(order, OrderType::POST_ONLY) == OrderStatus::ACKNOWLEDGED) {
+            order.status = OrderStatus::ACKNOWLEDGED;
+            slot = order;
+            risk_manager_.record_quote(ts);
+        }
+        return;
     }
 
-    uint64_t ask_id = generate_order_id();
-    Order ask_order(ask_id, Side::SELL, decision.ask_price, ask_size, md.timestamp);
-    if (simulator.submit_order(ask_order, OrderType::POST_ONLY) == OrderStatus::ACKNOWLEDGED) {
-        ask_order.status = OrderStatus::ACKNOWLEDGED;
-        active_orders[side_index(Side::SELL)] = ask_order;
-        risk_manager_.record_quote(md.timestamp);
+    // Quote unchanged — no message to the exchange. This is the path the
+    // old cancel-all + resubmit loop wasted ~2 messages per tick on.
+    if (slot->price == price && slot->leaves_qty == qty) {
+        return;
+    }
+
+    if (simulator.amend_order(slot->order_id, price, qty, ts)) {
+        slot->price       = price;
+        slot->leaves_qty  = qty;
+        slot->updated_at  = ts;
+        risk_manager_.record_quote(ts);
+    } else {
+        // Engine REJECTed (typically a cross-self edge — new price would
+        // cross the opposite resting MM order). Leave the existing order
+        // in place; the strategy will get another tick to converge.
+        logger_->on_amend_rejected(slot->order_id);
     }
 }
 

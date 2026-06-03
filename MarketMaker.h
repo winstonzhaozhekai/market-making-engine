@@ -68,6 +68,15 @@ private:
 
     void on_fill(const FillEvent& fill);
     void update_quotes(const MarketDataEvent& md, MarketSimulator& simulator);
+    // Apply (or skip) a single side's quote against the resting slot.
+    // Decision matrix: no slot → submit; same price+size → no-op;
+    // anything else → amend (queue position preserved only for
+    // same-price downsize per engine semantics). If amend is rejected
+    // (cross-self edge), the existing resting order is left in place
+    // and the rejection is logged — no cancel+resubmit fallback.
+    void apply_quote(Side side, Ticks price, int qty,
+                     MarketSimulator& simulator,
+                     std::chrono::system_clock::time_point ts);
     void cancel_all_orders(MarketSimulator& simulator, std::chrono::system_clock::time_point now);
     uint64_t generate_order_id();
 };
