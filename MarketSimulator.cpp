@@ -108,9 +108,8 @@ MarketDataEvent MarketSimulator::produce_raw_md_event() {
         // M9 QueueReactive path: brownian mid is skipped (price discovery
         // is implicit in HLR market-order-driven inside depletion +
         // refill). All synthetic orders rest in the matching engine; the
-        // 20%-IOC stopgap is gone. Resulting MD event uses engine state
-        // for best_bid/best_ask; bid_levels_/ask_levels_ stay empty in
-        // M9/2 and are populated from engine depth in M9/3.
+        // 20%-IOC stopgap is gone. MD level arrays are derived from
+        // engine depth below (M9/3).
         step_queue_reactive(trades_buf_, mm_fills_buf_);
     } else {
         std::normal_distribution<> noise(0, volatility);
@@ -122,6 +121,41 @@ MarketDataEvent MarketSimulator::produce_raw_md_event() {
     }
 
     auto event_creation_time = current_time();
+
+    if (qr_) {
+        // Derive MD level arrays from the matching engine's authoritative
+        // book state. Depth 0 is the actual top-of-book, so MM resting
+        // inside the HLR levels surfaces naturally; per-level `size` is
+        // the aggregate qty across all orders at that price (synthetic
+        // makers + MM if it happens to sit at the level); `order_id`
+        // reports the time-priority-front maker so consumers that want a
+        // representative id can pick it up. We cap depth at the
+        // configured HLR level count to keep MD shape close to the
+        // pre-M9 5-level convention even if MM rests further out.
+        const std::size_t cap = static_cast<std::size_t>(config.hlr.num_levels);
+        bid_levels_.clear();
+        ask_levels_.clear();
+        const std::size_t n_bid =
+            std::min<std::size_t>(matching_engine.num_levels(Side::BUY),  cap);
+        const std::size_t n_ask =
+            std::min<std::size_t>(matching_engine.num_levels(Side::SELL), cap);
+        bid_levels_.reserve(n_bid);
+        ask_levels_.reserve(n_ask);
+        for (std::size_t d = 0; d < n_bid; ++d) {
+            bid_levels_.emplace_back(
+                matching_engine.price_at_depth(Side::BUY, d),
+                matching_engine.qty_at_depth(Side::BUY, d),
+                matching_engine.order_id_at_queue_pos(Side::BUY, d, 0),
+                event_creation_time);
+        }
+        for (std::size_t d = 0; d < n_ask; ++d) {
+            ask_levels_.emplace_back(
+                matching_engine.price_at_depth(Side::SELL, d),
+                matching_engine.qty_at_depth(Side::SELL, d),
+                matching_engine.order_id_at_queue_pos(Side::SELL, d, 0),
+                event_creation_time);
+        }
+    }
 
     std::vector<PartialFillEvent> partial_fills;
     for (const auto& fill : mm_fills_buf_) {
@@ -136,33 +170,15 @@ MarketDataEvent MarketSimulator::produce_raw_md_event() {
         }
     }
 
-    // MD header sourcing:
-    //   - Legacy: from the decoration vectors bid_levels_/ask_levels_.
-    //   - QueueReactive (M9/2): from engine state directly. Level arrays
-    //     stay empty in this commit; M9/3 fills them from engine depth.
-    const Ticks best_bid =
-        qr_ ? (matching_engine.empty(Side::BUY) ? Ticks{0}
-                                                : matching_engine.best_price(Side::BUY))
-            : (bid_levels_.empty() ? Ticks{0} : bid_levels_.front().price);
-    const Ticks best_ask =
-        qr_ ? (matching_engine.empty(Side::SELL) ? Ticks{0}
-                                                 : matching_engine.best_price(Side::SELL))
-            : (ask_levels_.empty() ? Ticks{0} : ask_levels_.front().price);
-    const int best_bid_sz =
-        qr_ ? (matching_engine.empty(Side::BUY) ? 0
-                                                : matching_engine.qty_at_depth(Side::BUY, 0))
-            : (bid_levels_.empty() ? 0 : bid_levels_.front().size);
-    const int best_ask_sz =
-        qr_ ? (matching_engine.empty(Side::SELL) ? 0
-                                                 : matching_engine.qty_at_depth(Side::SELL, 0))
-            : (ask_levels_.empty() ? 0 : ask_levels_.front().size);
-
+    // MD header: bid_levels_.front() is authoritative for both paths.
+    // Legacy populates bid_levels_/ask_levels_ via update_order_book();
+    // QueueReactive populates them above from engine depth at depth 0.
     MarketDataEvent event{
         instrument,
-        best_bid,
-        best_ask,
-        best_bid_sz,
-        best_ask_sz,
+        bid_levels_.empty() ? Ticks{0} : bid_levels_.front().price,
+        ask_levels_.empty() ? Ticks{0} : ask_levels_.front().price,
+        bid_levels_.empty() ? 0 : bid_levels_.front().size,
+        ask_levels_.empty() ? 0 : ask_levels_.front().size,
         bid_levels_,
         ask_levels_,
         std::move(trades_buf_),

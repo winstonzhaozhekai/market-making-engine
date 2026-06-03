@@ -163,6 +163,65 @@ TEST(QueueReactiveSimulator, SyntheticOrderQueuesStayNonNegative) {
     }
 }
 
+TEST(QueueReactiveSimulator, MdLevelsDerivedFromEngineState) {
+    // Under QueueReactive, every MD event's bid_levels_/ask_levels_ must
+    // mirror the matching engine's actual book at the top `hlr.num_levels`
+    // depths. We check this on the first event after construction (which
+    // is purely the seeded initial_queue) and again after long-run
+    // dynamics have churned the book.
+    auto check_md_against_engine = [](const MarketDataEvent& md,
+                                      const MatchingEngine& eng,
+                                      int num_levels_cap) {
+        const std::size_t cap = static_cast<std::size_t>(num_levels_cap);
+        const std::size_t exp_bid =
+            std::min<std::size_t>(eng.num_levels(Side::BUY),  cap);
+        const std::size_t exp_ask =
+            std::min<std::size_t>(eng.num_levels(Side::SELL), cap);
+        ASSERT_EQ(md.bid_levels.size(), exp_bid);
+        ASSERT_EQ(md.ask_levels.size(), exp_ask);
+        for (std::size_t d = 0; d < exp_bid; ++d) {
+            EXPECT_EQ(md.bid_levels[d].price,
+                      eng.price_at_depth(Side::BUY, d));
+            EXPECT_EQ(md.bid_levels[d].size,
+                      eng.qty_at_depth(Side::BUY, d));
+        }
+        for (std::size_t d = 0; d < exp_ask; ++d) {
+            EXPECT_EQ(md.ask_levels[d].price,
+                      eng.price_at_depth(Side::SELL, d));
+            EXPECT_EQ(md.ask_levels[d].size,
+                      eng.qty_at_depth(Side::SELL, d));
+        }
+        if (!md.bid_levels.empty()) {
+            EXPECT_EQ(md.best_bid_price, md.bid_levels.front().price);
+            EXPECT_EQ(md.best_bid_size,  md.bid_levels.front().size);
+        }
+        if (!md.ask_levels.empty()) {
+            EXPECT_EQ(md.best_ask_price, md.ask_levels.front().price);
+            EXPECT_EQ(md.best_ask_size,  md.ask_levels.front().size);
+        }
+    };
+
+    SimulationConfig cfg = qr_base_config();
+    MarketSimulator  sim(cfg);
+    MarketDataEvent first = sim.generate_event();
+    check_md_against_engine(first, sim.get_matching_engine(),
+                            cfg.hlr.num_levels);
+    EXPECT_EQ(first.bid_levels.size(), static_cast<std::size_t>(5));
+    EXPECT_EQ(first.ask_levels.size(), static_cast<std::size_t>(5));
+    // After seeding, depth 0 bid = ref - 1 tick, depth 0 ask = ref + 1.
+    // Spread = ask - bid = 2 ticks.
+    EXPECT_EQ(first.best_ask_price - first.best_bid_price, Ticks{2});
+
+    // After dynamics under a high-theta stress config.
+    SimulationConfig stress = cfg;
+    stress.hlr.theta_per_ns = 1.0e-6;
+    MarketSimulator sim2(stress);
+    for (int i = 0; i < 10'000; ++i) (void)sim2.generate_event();
+    MarketDataEvent later = sim2.generate_event();
+    check_md_against_engine(later, sim2.get_matching_engine(),
+                            stress.hlr.num_levels);
+}
+
 TEST(QueueReactiveSimulator, LegacyDefaultUnchangedWhenLobSeedTouched) {
     // Touching lob_seed / hlr fields under the Legacy default must not
     // perturb the run — those knobs are inert until lob_model flips.
