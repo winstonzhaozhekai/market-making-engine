@@ -5,10 +5,27 @@
 #include <string>
 
 #include "LatencyConfig.h"
+#include "QueueReactiveLob.h"
 
 enum class SimulationMode {
     Simulate,
     Replay
+};
+
+// M9: which order-book simulation model is active.
+//   Legacy        — the pre-M9 "5 levels glued to mid" decoration generator
+//                   with random walks on per-level qty + a 20%-per-step IOC
+//                   aggressor. Source-of-truth: MarketSimulator::bid_levels_
+//                   / ask_levels_. M5/M6/M7/M8 binary-log byte-equality
+//                   contracts assume Legacy.
+//   QueueReactive — Huang/Lehalle/Rosenbaum queue-reactive LOB
+//                   (`include/QueueReactiveLob.h`). All synthetic orders
+//                   rest in the matching engine; aggressor flow comes from
+//                   HLR market-order events; MD events derive their level
+//                   arrays from engine state (M9/3).
+enum class LobModel : std::uint8_t {
+    Legacy,
+    QueueReactive,
 };
 
 struct SimulationConfig {
@@ -27,6 +44,18 @@ struct SimulationConfig {
     mme::StageLatencyConfig ack_latency{};
     mme::StageLatencyConfig matching_latency{};
     std::uint32_t latency_seed = 0xC0FFEEu;
+
+    // M9: synthetic-LOB model selection. `Legacy` keeps existing tests
+    // byte-equal (binary-log + determinism replay); `QueueReactive`
+    // engages the HLR primitive in `include/QueueReactiveLob.h`. The
+    // `hlr` block is consumed only when `lob_model == QueueReactive`,
+    // so leaving it default-constructed is fine for Legacy runs.
+    // `lob_seed` is an independent determinism axis from `seed`
+    // (mid-drift) and `latency_seed`, so backtest sweeps can hold the
+    // LOB path fixed while varying the latency model and vice versa.
+    LobModel       lob_model = LobModel::Legacy;
+    mme::HLRConfig hlr{};
+    std::uint32_t  lob_seed = 0xB00B5u;
 
     int iterations = 1000;
     std::uint32_t seed = 42;

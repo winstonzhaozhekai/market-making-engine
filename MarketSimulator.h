@@ -13,6 +13,7 @@
 #include "MatchingEngine.h"
 #include "include/Instrument.h"
 #include "include/LatencyScheduler.h"
+#include "include/QueueReactiveLob.h"
 #include "include/SimulationConfig.h"
 
 class SpscMdLogger;
@@ -82,6 +83,34 @@ private:
     };
     std::optional<LatencyState> latency_;
 
+    // ---- M9 queue-reactive LOB state -----------------------------------
+    // Engaged only when config.lob_model == LobModel::QueueReactive. The
+    // HLR primitive (`include/QueueReactiveLob.h`) is the stochastic
+    // generator; this struct owns the wiring state that maps emitted
+    // HLREvents onto add_order / cancel_order / IOC calls against the
+    // matching engine, plus the per-side per-level FIFO of synthetic
+    // order ids that lets Cancel events pick a concrete order to pull.
+    //
+    // Invariant: hlr_side.queue_at(level) equals the total resting
+    // synthetic qty at the corresponding price in the engine. Every
+    // synthetic order rests at exactly `cfg.hlr.mean_limit_size` units;
+    // LimitAdd push_back, Cancel pop_back, MarketOrder consumes the
+    // head-of-queue via the engine's price-time-priority IOC match.
+    struct QueueReactiveState {
+        mme::HLRSide                bid_side;
+        mme::HLRSide                ask_side;
+        std::mt19937_64             rng;
+        std::vector<mme::HLREvent>  event_buf;
+        using LevelFifo = std::deque<std::uint64_t>;
+        std::array<LevelFifo, mme::HLRConfig::kMaxLevels> bid_orders;
+        std::array<LevelFifo, mme::HLRConfig::kMaxLevels> ask_orders;
+        // Reference tick price. Bid level i sits at ref_ticks - (i+1);
+        // ask level i sits at ref_ticks + (i+1). Fixed for v1 — mid drift
+        // emerges from MarketOrder-driven inside depletion + refill.
+        Ticks                        ref_ticks{0};
+    };
+    std::optional<QueueReactiveState> qr_;
+
     // Produces a fresh raw MD event at current simulation time. Used by
     // both the zero-latency fast path (returned directly) and the M8 path
     // (enqueued in feed_queue; mm_fills stripped + deferred via match_queue).
@@ -92,6 +121,16 @@ private:
     void initialize_order_book();
     void update_order_book();
     void simulate_trade_activity(std::vector<Trade>& trades, std::vector<FillEvent>& mm_fills);
+
+    // ---- M9 queue-reactive LOB helpers ---------------------------------
+    void init_queue_reactive();
+    void step_queue_reactive(std::vector<Trade>&     trades,
+                             std::vector<FillEvent>& mm_fills);
+    Ticks bid_level_ticks(int level) const;
+    Ticks ask_level_ticks(int level) const;
+    int   bid_level_of_price(Ticks px) const;
+    int   ask_level_of_price(Ticks px) const;
+
     uint64_t generate_order_id();
     std::chrono::system_clock::time_point current_time();
     void load_binary_event_log(const std::string& path);

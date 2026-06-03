@@ -164,13 +164,22 @@ public:
     Side         side()              const { return side_; }
     const HLRConfig& config()        const { return cfg_; }
 
-    // Externally-applied decrement. Used when an event outside the HLR
-    // process (e.g., a MM fill consuming a synthetic order at the same
-    // price) reduces resting qty at a level. Unused in v1 because MM
-    // does not share queues with HLR.
+    // Externally-applied decrement / increment. Used by the wiring layer
+    // to reconcile q with reality after events whose synthetic-vs-MM
+    // routing isn't knowable inside the primitive — primarily MarketOrder
+    // events, which pre-decrement q[0] by ev.qty but route through the
+    // matching engine where MM resting at the inside can absorb some of
+    // the consumption. The wiring layer refunds the MM-absorbed portion
+    // via on_external_increment(0, mm_consumed) to preserve the
+    // invariant `q[level] == resting synthetic units at that level`.
     void on_external_decrement(int level, int qty) {
         assert(level >= 0 && level < cfg_.num_levels);
         q_[level] = std::max(0, q_[level] - qty);
+    }
+    void on_external_increment(int level, int qty) {
+        assert(level >= 0 && level < cfg_.num_levels);
+        assert(qty >= 0);
+        q_[level] += qty;
     }
 
 private:

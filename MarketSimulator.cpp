@@ -64,7 +64,11 @@ MarketSimulator::MarketSimulator(const SimulationConfig& cfg)
         });
     }
 
-    initialize_order_book();
+    if (config.lob_model == LobModel::QueueReactive) {
+        init_queue_reactive();
+    } else {
+        initialize_order_book();
+    }
 }
 
 MarketSimulator::~MarketSimulator() = default;
@@ -97,15 +101,25 @@ MarketDataEvent MarketSimulator::generate_event() {
 }
 
 MarketDataEvent MarketSimulator::produce_raw_md_event() {
-    std::normal_distribution<> noise(0, volatility);
-    mid_price_dollars += noise(rng);
-    mid_price_dollars = std::max(mid_price_dollars, 0.01);
-
-    update_order_book();
-
     trades_buf_.clear();
     mm_fills_buf_.clear();
-    simulate_trade_activity(trades_buf_, mm_fills_buf_);
+
+    if (qr_) {
+        // M9 QueueReactive path: brownian mid is skipped (price discovery
+        // is implicit in HLR market-order-driven inside depletion +
+        // refill). All synthetic orders rest in the matching engine; the
+        // 20%-IOC stopgap is gone. Resulting MD event uses engine state
+        // for best_bid/best_ask; bid_levels_/ask_levels_ stay empty in
+        // M9/2 and are populated from engine depth in M9/3.
+        step_queue_reactive(trades_buf_, mm_fills_buf_);
+    } else {
+        std::normal_distribution<> noise(0, volatility);
+        mid_price_dollars += noise(rng);
+        mid_price_dollars = std::max(mid_price_dollars, 0.01);
+
+        update_order_book();
+        simulate_trade_activity(trades_buf_, mm_fills_buf_);
+    }
 
     auto event_creation_time = current_time();
 
@@ -122,12 +136,33 @@ MarketDataEvent MarketSimulator::produce_raw_md_event() {
         }
     }
 
+    // MD header sourcing:
+    //   - Legacy: from the decoration vectors bid_levels_/ask_levels_.
+    //   - QueueReactive (M9/2): from engine state directly. Level arrays
+    //     stay empty in this commit; M9/3 fills them from engine depth.
+    const Ticks best_bid =
+        qr_ ? (matching_engine.empty(Side::BUY) ? Ticks{0}
+                                                : matching_engine.best_price(Side::BUY))
+            : (bid_levels_.empty() ? Ticks{0} : bid_levels_.front().price);
+    const Ticks best_ask =
+        qr_ ? (matching_engine.empty(Side::SELL) ? Ticks{0}
+                                                 : matching_engine.best_price(Side::SELL))
+            : (ask_levels_.empty() ? Ticks{0} : ask_levels_.front().price);
+    const int best_bid_sz =
+        qr_ ? (matching_engine.empty(Side::BUY) ? 0
+                                                : matching_engine.qty_at_depth(Side::BUY, 0))
+            : (bid_levels_.empty() ? 0 : bid_levels_.front().size);
+    const int best_ask_sz =
+        qr_ ? (matching_engine.empty(Side::SELL) ? 0
+                                                 : matching_engine.qty_at_depth(Side::SELL, 0))
+            : (ask_levels_.empty() ? 0 : ask_levels_.front().size);
+
     MarketDataEvent event{
         instrument,
-        bid_levels_.empty() ? Ticks{0} : bid_levels_.front().price,
-        ask_levels_.empty() ? Ticks{0} : ask_levels_.front().price,
-        bid_levels_.empty() ? 0 : bid_levels_.front().size,
-        ask_levels_.empty() ? 0 : ask_levels_.front().size,
+        best_bid,
+        best_ask,
+        best_bid_sz,
+        best_ask_sz,
         bid_levels_,
         ask_levels_,
         std::move(trades_buf_),
@@ -399,6 +434,209 @@ uint64_t MarketSimulator::generate_order_id() {
 std::chrono::system_clock::time_point MarketSimulator::current_time() {
     simulation_clock += std::chrono::milliseconds(1);
     return simulation_clock;
+}
+
+// ---- M9 queue-reactive LOB wiring ---------------------------------------
+//
+// Synthetic-order bookkeeping invariant:
+//   qr_->bid_side.queue_at(i)  ==  sum of leaves_qty of resting synthetic
+//                                  orders at bid_level_ticks(i) in the
+//                                  matching engine.
+// Every synthetic order rests at exactly cfg.hlr.mean_limit_size units.
+// LimitAdd push_back to fifo[level]; Cancel pop_back; MarketOrder consumes
+// inside qty via an IOC and we walk SubmitResult.fills to update FIFOs +
+// HLR.q. MM-side fills (kSimOrderTag bit clear) propagate to mm_fills.
+
+Ticks MarketSimulator::bid_level_ticks(int level) const {
+    return qr_->ref_ticks - Ticks{static_cast<Ticks>(level + 1)};
+}
+Ticks MarketSimulator::ask_level_ticks(int level) const {
+    return qr_->ref_ticks + Ticks{static_cast<Ticks>(level + 1)};
+}
+int MarketSimulator::bid_level_of_price(Ticks px) const {
+    const Ticks off = qr_->ref_ticks - px;
+    const int   lvl = static_cast<int>(off) - 1;
+    if (lvl < 0 || lvl >= config.hlr.num_levels) return -1;
+    return lvl;
+}
+int MarketSimulator::ask_level_of_price(Ticks px) const {
+    const Ticks off = px - qr_->ref_ticks;
+    const int   lvl = static_cast<int>(off) - 1;
+    if (lvl < 0 || lvl >= config.hlr.num_levels) return -1;
+    return lvl;
+}
+
+void MarketSimulator::init_queue_reactive() {
+    // Floor-round initial_queue to whole orders of mean_limit_size so the
+    // HLR.q ≡ engine-depth invariant holds exactly after seeding. The
+    // primitive's `step()` keeps the invariant from drifting because
+    // adds/cancels move in unit_size increments and MarketOrder
+    // consumption is reconciled in step_queue_reactive() below.
+    mme::HLRConfig hlr_cfg = config.hlr;
+    const int unit_size = hlr_cfg.mean_limit_size;
+    for (int i = 0; i < hlr_cfg.num_levels; ++i) {
+        hlr_cfg.initial_queue[i] =
+            (hlr_cfg.initial_queue[i] / unit_size) * unit_size;
+    }
+
+    qr_.emplace(QueueReactiveState{
+        mme::HLRSide(Side::BUY,  hlr_cfg),
+        mme::HLRSide(Side::SELL, hlr_cfg),
+        std::mt19937_64(config.lob_seed),
+        {},
+        {},
+        {},
+        instrument_.to_ticks(mid_price_dollars),
+    });
+
+    auto& qr = *qr_;
+    qr.event_buf.reserve(16);
+    for (int i = 0; i < hlr_cfg.num_levels; ++i) {
+        qr.bid_orders[i].clear();
+        qr.ask_orders[i].clear();
+    }
+
+    for (int level = 0; level < hlr_cfg.num_levels; ++level) {
+        const int n_orders = hlr_cfg.initial_queue[level] / unit_size;
+        for (int k = 0; k < n_orders; ++k) {
+            const auto ts = current_time();
+            {
+                const uint64_t id = generate_order_id();
+                Order o(id, Side::BUY, bid_level_ticks(level), unit_size, ts);
+                matching_engine.add_order(std::move(o), OrderType::POST_ONLY);
+                qr.bid_orders[level].push_back(id);
+            }
+            {
+                const uint64_t id = generate_order_id();
+                Order o(id, Side::SELL, ask_level_ticks(level), unit_size, ts);
+                matching_engine.add_order(std::move(o), OrderType::POST_ONLY);
+                qr.ask_orders[level].push_back(id);
+            }
+        }
+    }
+}
+
+void MarketSimulator::step_queue_reactive(std::vector<Trade>&     trades,
+                                          std::vector<FillEvent>& mm_fills) {
+    constexpr std::int64_t kStepNs = 1000;  // 1 µs, matches M8 production step
+    auto& qr = *qr_;
+
+    qr.event_buf.clear();
+    qr.bid_side.step(kStepNs, qr.rng, qr.event_buf);
+    qr.ask_side.step(kStepNs, qr.rng, qr.event_buf);
+
+    for (const auto& ev : qr.event_buf) {
+        switch (ev.kind) {
+        case mme::HLREventKind::LimitAdd: {
+            const Ticks px = (ev.side == Side::BUY)
+                ? bid_level_ticks(ev.level)
+                : ask_level_ticks(ev.level);
+            const uint64_t id = generate_order_id();
+            Order o(id, ev.side, px, ev.qty, current_time());
+            matching_engine.add_order(std::move(o), OrderType::POST_ONLY);
+            auto& fifo = (ev.side == Side::BUY)
+                ? qr.bid_orders[ev.level]
+                : qr.ask_orders[ev.level];
+            fifo.push_back(id);
+            break;
+        }
+        case mme::HLREventKind::Cancel: {
+            auto& fifo = (ev.side == Side::BUY)
+                ? qr.bid_orders[ev.level]
+                : qr.ask_orders[ev.level];
+            if (!fifo.empty()) {
+                const uint64_t id = fifo.back();
+                fifo.pop_back();
+                matching_engine.cancel_order(id);
+            }
+            // If fifo empty here, the resting order was already consumed
+            // by a same-step MarketOrder above (rare with Bernoulli draws
+            // at 1µs step rates). HLR.q was decremented at sample time so
+            // a stale Cancel just drops without side-effect.
+            break;
+        }
+        case mme::HLREventKind::MarketOrder: {
+            // Aggressor is the OPPOSITE side of `ev.side` (a bid-side
+            // MarketOrder event depletes resting BUY queue → aggressor
+            // SELLs). Submit a marketable IOC; the engine matches by
+            // price-time priority and routes any MM-resting fills to
+            // `mm_fills` while we settle synthetic-resting fills against
+            // the per-level FIFO.
+            const Side aggressor = (ev.side == Side::BUY) ? Side::SELL : Side::BUY;
+            const Ticks ioc_px = (aggressor == Side::BUY)
+                ? ask_level_ticks(config.hlr.num_levels - 1)  // sweep up to deepest ask
+                : bid_level_ticks(config.hlr.num_levels - 1); // sweep down to deepest bid
+
+            const uint64_t trade_id =
+                kTradeIdTag | static_cast<uint64_t>(sequence_number + 1);
+            const auto     ts       = current_time();
+            Order ioc(kTradeIdTag | trade_id, aggressor, ioc_px, ev.qty, ts);
+
+            auto result = matching_engine.add_order(
+                std::move(ioc), OrderType::IOC, trade_id);
+
+            // The trade event emits at the inside price the IOC hit first.
+            // We summarize aggressor-side activity as a single Trade with
+            // the cumulative filled qty; the per-maker fills below carry
+            // per-leg pricing.
+            int total_filled = 0;
+            Ticks trade_px = ioc_px;
+            bool  first    = true;
+            for (const auto& fill : result.fills) {
+                total_filled += fill.fill_qty;
+                if (first) { trade_px = fill.price; first = false; }
+            }
+            if (total_filled > 0) {
+                trades.emplace_back(Trade{
+                    aggressor, trade_px, total_filled, trade_id, ts
+                });
+            }
+
+            // Settle each fill against either the synthetic FIFO or MM.
+            constexpr uint64_t kSimMask = kSimOrderTag;
+            int synthetic_consumed_units = 0;
+            for (const auto& fill : result.fills) {
+                const bool is_synthetic = (fill.order_id & kSimMask) != 0;
+                if (is_synthetic) {
+                    synthetic_consumed_units += fill.fill_qty;
+                    // Find which HLR level this synthetic order was at,
+                    // and remove from FIFO if fully filled.
+                    const int level = (fill.side == Side::BUY)
+                        ? bid_level_of_price(fill.price)
+                        : ask_level_of_price(fill.price);
+                    if (level >= 0 && fill.leaves_qty == 0) {
+                        auto& fifo = (fill.side == Side::BUY)
+                            ? qr.bid_orders[level]
+                            : qr.ask_orders[level];
+                        for (auto it = fifo.begin(); it != fifo.end(); ++it) {
+                            if (*it == fill.order_id) {
+                                fifo.erase(it);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    mm_fills.push_back(fill);
+                }
+            }
+
+            // Reconcile HLR.q with what actually happened. The primitive
+            // pre-decremented q[0] by ev.qty assuming all consumption
+            // came from synthetic at level 0. If MM was at the inside,
+            // some of that ev.qty was absorbed by MM and synthetic at
+            // level 0 should not have moved. Refund the MM portion to
+            // preserve the invariant
+            //   HLR.q[level] == resting synthetic units at that level.
+            const int mm_absorbed = ev.qty - synthetic_consumed_units;
+            if (mm_absorbed > 0) {
+                auto& hlr_side = (ev.side == Side::BUY)
+                    ? qr.bid_side : qr.ask_side;
+                hlr_side.on_external_increment(0, mm_absorbed);
+            }
+            break;
+        }
+        }
+    }
 }
 
 void MarketSimulator::load_binary_event_log(const std::string& path) {
