@@ -170,20 +170,51 @@ TEST(HotPathAllocations, spsc_logger_steady_state_zero_allocations) {
 } // namespace
 
 // ---- Global operator new/delete interposition ------------------------------
-// These replace the stock global allocators across the whole test binary.
-// We gate counting via stats().active so this doesn't fight gtest.
+// These replace the stock global allocators across the whole test binary so
+// every heap allocation is counted (gated by stats().active) and routed
+// through malloc/free.
+//
+// We must replace EVERY variant, not just the throwing size_t ones. libstdc++'s
+// std::stable_sort — which gtest's TestSuite::Run() uses to order tests —
+// allocates a temporary buffer via the *nothrow* operator new and frees it via
+// the sized operator delete. Overriding the sized delete (-> free) but leaving
+// the nothrow new as the real operator new makes ASan report
+// alloc-dealloc-mismatch (operator new vs free) and abort the test. Replacing
+// all variants keeps ASan seeing a single malloc/free family. (libc++ on macOS
+// doesn't route stable_sort through nothrow-new, so this only bit the Linux
+// asan CI job.) The aligned variants are covered defensively — the engine's
+// cache-line-aligned types (e.g. SpscRing) take the over-aligned new path.
 
-void* operator new(std::size_t n) {
+static void* counted_malloc(std::size_t n) {
     if (stats().active) ++stats().count;
-    if (void* p = std::malloc(n == 0 ? 1 : n)) return p;
-    throw std::bad_alloc{};
+    return std::malloc(n == 0 ? 1 : n);
 }
-void* operator new[](std::size_t n) {
+static void* counted_aligned(std::size_t n, std::size_t al) {
     if (stats().active) ++stats().count;
-    if (void* p = std::malloc(n == 0 ? 1 : n)) return p;
-    throw std::bad_alloc{};
+    if (al < sizeof(void*)) al = sizeof(void*);
+    std::size_t sz = (n + al - 1) & ~(al - 1);  // aligned_alloc needs size % al == 0
+    if (sz == 0) sz = al;
+    return std::aligned_alloc(al, sz);
 }
-void operator delete(void* p) noexcept                  { std::free(p); }
-void operator delete[](void* p) noexcept                { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept     { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept   { std::free(p); }
+
+void* operator new(std::size_t n)   { if (void* p = counted_malloc(n)) return p; throw std::bad_alloc{}; }
+void* operator new[](std::size_t n) { if (void* p = counted_malloc(n)) return p; throw std::bad_alloc{}; }
+void* operator new(std::size_t n, const std::nothrow_t&) noexcept   { return counted_malloc(n); }
+void* operator new[](std::size_t n, const std::nothrow_t&) noexcept { return counted_malloc(n); }
+void* operator new(std::size_t n, std::align_val_t a)   { if (void* p = counted_aligned(n, static_cast<std::size_t>(a))) return p; throw std::bad_alloc{}; }
+void* operator new[](std::size_t n, std::align_val_t a) { if (void* p = counted_aligned(n, static_cast<std::size_t>(a))) return p; throw std::bad_alloc{}; }
+void* operator new(std::size_t n, std::align_val_t a, const std::nothrow_t&) noexcept   { return counted_aligned(n, static_cast<std::size_t>(a)); }
+void* operator new[](std::size_t n, std::align_val_t a, const std::nothrow_t&) noexcept { return counted_aligned(n, static_cast<std::size_t>(a)); }
+
+void operator delete(void* p) noexcept                                   { std::free(p); }
+void operator delete[](void* p) noexcept                                 { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept                      { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept                    { std::free(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept            { std::free(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept          { std::free(p); }
+void operator delete(void* p, std::align_val_t) noexcept                 { std::free(p); }
+void operator delete[](void* p, std::align_val_t) noexcept               { std::free(p); }
+void operator delete(void* p, std::size_t, std::align_val_t) noexcept    { std::free(p); }
+void operator delete[](void* p, std::size_t, std::align_val_t) noexcept  { std::free(p); }
+void operator delete(void* p, std::align_val_t, const std::nothrow_t&) noexcept   { std::free(p); }
+void operator delete[](void* p, std::align_val_t, const std::nothrow_t&) noexcept { std::free(p); }
