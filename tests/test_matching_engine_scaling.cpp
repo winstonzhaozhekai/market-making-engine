@@ -77,9 +77,17 @@ TEST(MatchingEngineScaling, cancel_is_o1_ish) {
     // Permissive upper bound: linear cancel would be ~100x at N=100k vs
     // N=1k. Hash + intrusive unlink + O(log levels) erase should sit
     // well under 5x.
-    EXPECT_LT(t100k / t1k, 5.0)
+    //
+    // steady_clock quantizes to ~40 ns on some hosts (Apple Silicon), so the
+    // N=1k median lands at just 1-3 clock ticks. Dividing a noise-laden t100k
+    // by that near-floor baseline makes the raw ratio cross 5x on shared CI
+    // runners even though cancel is genuinely O(1). Floor the baseline to a
+    // few ticks so this asserts *scaling*, not clock resolution — a true O(N)
+    // cancel is ~100x at N=100k and still blows past the bound from any floor.
+    const double baseline = std::max(t1k, 250.0);
+    EXPECT_LT(t100k / baseline, 5.0)
         << "cancel scaling looks worse than O(1)-ish: "
-        << "t1k=" << t1k << " t100k=" << t100k;
+        << "t1k=" << t1k << " t100k=" << t100k << " baseline=" << baseline;
 }
 
 }  // namespace
