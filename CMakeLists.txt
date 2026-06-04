@@ -79,6 +79,20 @@ target_link_libraries(bench_lob_realism PRIVATE mme_core mme_warnings)
 add_executable(itch_replay bench/itch_replay.cpp)
 target_link_libraries(itch_replay PRIVATE mme_core mme_warnings)
 
+# M11/2 per-component microbenches. Each isolates one hot-path operation
+# and emits a `# section: …` CSV via bench/bench_common.h.
+add_executable(bench_matching bench/bench_matching.cpp)
+target_link_libraries(bench_matching PRIVATE mme_core mme_warnings)
+
+add_executable(bench_accounting bench/bench_accounting.cpp)
+target_link_libraries(bench_accounting PRIVATE mme_core mme_warnings)
+
+add_executable(bench_risk bench/bench_risk.cpp)
+target_link_libraries(bench_risk PRIVATE mme_core mme_warnings)
+
+add_executable(bench_strategy bench/bench_strategy.cpp)
+target_link_libraries(bench_strategy PRIVATE mme_core mme_warnings)
+
 # ---- Tests -----------------------------------------------------------------
 
 enable_testing()
