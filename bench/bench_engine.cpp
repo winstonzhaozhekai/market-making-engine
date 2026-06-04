@@ -11,7 +11,7 @@
 #include "include/HeuristicStrategy.h"
 #include "include/Strategy.h"
 #include "strategies/AvellanedaStoikovStrategy.h"
-#include "PerformanceModule.h"
+#include "include/HdrPerformanceModule.h"
 
 // Templated on the concrete strategy + logger so the compiler can
 // devirtualize compute_quotes / on_fill / on_sequence_gap / on_empty_book /
@@ -42,7 +42,7 @@ static void run_bench(int events, uint32_t seed, LobModel lob_model,
     mme::MarketMakerT<StrategyT, LoggerT> mm(
         simulator.instrument_meta(), risk_cfg, &strategy, &logger);
 
-    PerformanceModule perf(static_cast<size_t>(events));
+    mme::HdrPerformanceModule perf;
 
     std::cout << "Strategy: " << strategy_name
               << ", events: " << events
