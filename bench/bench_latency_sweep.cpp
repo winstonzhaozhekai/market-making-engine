@@ -108,6 +108,12 @@ void build_config(SimulationConfig& cfg, const Args& a, std::int64_t mean_ns) {
     cfg.volatility = a.volatility;
     cfg.quiet = true;
     cfg.latency_seed = a.latency_seed;
+    // The M8 monotone fill-rate-vs-feed-latency story is a brownian-
+    // generator + 20%-IOC-counterparty property. Under QueueReactive the
+    // curve is flat (synthetic FIFO time priority absorbs the aggressor
+    // regardless of MM staleness). Pin to Legacy so this sweep reports
+    // the M8 narrative; use `bench_lob_realism` for QueueReactive sweeps.
+    cfg.lob_model = LobModel::Legacy;
     if (mean_ns == 0) {
         cfg.feed_latency.kind    = mme::LatencyDistribution::Zero;
         cfg.feed_latency.mean_ns = 0;

@@ -57,6 +57,11 @@ SimulationConfig make_sweep_config(std::int64_t feed_mean_ns) {
     cfg.latency_seed = 0xC0FFEEu;
     cfg.feed_latency.kind    = mme::LatencyDistribution::Constant;
     cfg.feed_latency.mean_ns = feed_mean_ns;
+    // M8 monotone decline is a property of the brownian-driven Legacy
+    // generator + 20%-IOC counterparty + M8 queue-position gate. Under
+    // QueueReactive the decline becomes flat (see M9/4 LobRealism); pin
+    // here so the M8 regression test stays on the path it was written for.
+    cfg.lob_model = LobModel::Legacy;
     return cfg;
 }
 

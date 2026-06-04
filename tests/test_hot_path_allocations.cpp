@@ -104,6 +104,13 @@ void run_zero_alloc_loop(LoggerT& logger) {
     cfg.seed = 1;
     cfg.iterations = 0;
     cfg.quiet = true;
+    // Hot-path alloc guard measures MM's tick_once steady-state allocs
+    // against pre-built MD events; sim is used only as a host for the
+    // matching engine that MM submits orders to. Pin to Legacy so we
+    // don't seed synthetic orders into the pool during sim construction —
+    // those allocations are before the guard window (and so wouldn't
+    // count) but pinning keeps the test's regime byte-equal to M5/M6/M7.
+    cfg.lob_model = LobModel::Legacy;
     MarketSimulator sim(cfg);
     Instrument ins = sim.instrument_meta();
     Ticks bp = ins.to_ticks(99.95);

@@ -290,19 +290,21 @@ void MarketSimulator::simulate_trade_activity(std::vector<Trade>& trades, std::v
             Ticks trade_price = sim_top_price;
             bool  route_to_engine = true;
 
-            // M8 queue-position model: when latency is engaged, treat the
-            // simulator's synthetic LOB at sim_top_price as having
-            // unlimited queued size with full time priority over MM at
-            // that price. MM is only hit when MM's resting quote is
-            // strictly better than the synthetic top. Without this the
-            // simulator's IOC pass-through sweeps MM at MM's stale price
-            // even when MM is behind the displayed market — produces an
-            // adverse-selection bump (more fills, worse prices) at small
-            // latency that masks the monotone fill-rate-vs-feed-latency
-            // signal real exchange backtests show. M9's queue-reactive
-            // LOB will subsume this with explicit queue modeling.
+            // M8 queue-position model (Legacy-only path; QueueReactive
+            // never reaches this function — see produce_raw_md_event).
+            // When latency is engaged, treat the synthetic LOB at
+            // sim_top_price as having unlimited queued size with full
+            // time priority over MM at that price. MM is only hit when
+            // MM's resting quote is strictly better than the synthetic
+            // top. Without this the IOC pass-through sweeps MM at MM's
+            // stale price even when MM is behind the displayed market —
+            // produces an adverse-selection bump (more fills, worse
+            // prices) at small latency that masks the monotone
+            // fill-rate-vs-feed-latency signal. M9's queue-reactive LOB
+            // subsumes this with explicit queue modeling, which is why
+            // the gate is unreachable under QueueReactive.
             //
-            // Zero-latency case keeps the M6/M7 semantics verbatim so the
+            // Zero-latency Legacy keeps M6/M7 semantics verbatim so the
             // binary-log byte-equality + deterministic-replay invariants
             // survive — the rule applies only when `latency_` is engaged.
             if (latency_) {

@@ -35,6 +35,11 @@ struct Fixture {
         cfg.seed = 1;
         cfg.iterations = 0;
         cfg.quiet = true;
+        // MM quote/amend regression tests assume an empty matching
+        // engine at construction. Under QueueReactive default the
+        // engine is pre-seeded with HLR initial_queue orders, which
+        // changes interaction outcomes. Pin to Legacy.
+        cfg.lob_model = LobModel::Legacy;
         sim = std::make_unique<MarketSimulator>(cfg);
         ins = sim->instrument_meta();
         auto owned = std::make_unique<StubStrategy>();

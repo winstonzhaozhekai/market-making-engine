@@ -84,6 +84,10 @@ TEST(BinaryLogRoundTrip, WriteReadRewriteByteEqual) {
     cfg.seed = 4242;
     cfg.iterations = 500;
     cfg.quiet = true;
+    // M6 byte-equality contract is asserted against the Legacy decoration
+    // path; pin lob_model so M9's default flip to QueueReactive does not
+    // silently re-baseline the fixture.
+    cfg.lob_model = LobModel::Legacy;
 
     // Pass 1: simulate + log to A.
     std::vector<MarketDataEvent> events_generated;

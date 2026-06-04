@@ -85,7 +85,9 @@ int main(int argc, char* argv[]) {
     int events = 10000;
     uint32_t seed = 42;
     std::string strategy_name = "heuristic";
-    LobModel lob_model = LobModel::Legacy;
+    // Match the M9/6 SimulationConfig default. Pass `--lob-model legacy`
+    // to compare against the pre-M9 brownian-driven Legacy baseline.
+    LobModel lob_model = LobModel::QueueReactive;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];

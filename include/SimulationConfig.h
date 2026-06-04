@@ -45,15 +45,19 @@ struct SimulationConfig {
     mme::StageLatencyConfig matching_latency{};
     std::uint32_t latency_seed = 0xC0FFEEu;
 
-    // M9: synthetic-LOB model selection. `Legacy` keeps existing tests
-    // byte-equal (binary-log + determinism replay); `QueueReactive`
-    // engages the HLR primitive in `include/QueueReactiveLob.h`. The
-    // `hlr` block is consumed only when `lob_model == QueueReactive`,
-    // so leaving it default-constructed is fine for Legacy runs.
-    // `lob_seed` is an independent determinism axis from `seed`
-    // (mid-drift) and `latency_seed`, so backtest sweeps can hold the
-    // LOB path fixed while varying the latency model and vice versa.
-    LobModel       lob_model = LobModel::Legacy;
+    // M9: synthetic-LOB model selection. `QueueReactive` is the
+    // canonical post-M9 mode — HLR-driven synthetic orders rest in the
+    // matching engine, aggressor flow comes from theta-driven market-
+    // order events, and MD level arrays are derived from engine state
+    // (`include/QueueReactiveLob.h`). `Legacy` keeps the pre-M9
+    // "5 levels glued to mid" decoration generator + 20%-per-step IOC
+    // aggressor for tests written against that path (M5/M6/M7/M8
+    // regression tests pin to it explicitly so their byte-equality and
+    // monotone-decline contracts hold). `lob_seed` is an independent
+    // determinism axis from `seed` (Legacy brownian) and `latency_seed`,
+    // so backtest sweeps can hold the LOB path fixed while varying the
+    // latency model and vice versa.
+    LobModel       lob_model = LobModel::QueueReactive;
     mme::HLRConfig hlr{};
     std::uint32_t  lob_seed = 0xB00B5u;
 

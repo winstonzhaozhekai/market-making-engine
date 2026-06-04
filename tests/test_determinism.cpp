@@ -146,6 +146,12 @@ RunCapture run_capture(const SimulationConfig& config, int events_to_process) {
 SimulationConfig base_config() {
     SimulationConfig c;
     c.iterations = 200;
+    // Pre-M9 determinism tests assert the brownian/decoration LOB path's
+    // seed → trajectory mapping. Under QueueReactive default the only
+    // determinism axis is lob_seed (brownian is unused), so the
+    // `DifferentSeedDiverges` contract is satisfied by a different test
+    // (`QueueReactiveSimulator.SameLobSeedReproducibleEngineState`).
+    c.lob_model = LobModel::Legacy;
     return c;
 }
 

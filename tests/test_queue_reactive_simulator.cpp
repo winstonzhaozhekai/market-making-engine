@@ -222,18 +222,20 @@ TEST(QueueReactiveSimulator, MdLevelsDerivedFromEngineState) {
                             stress.hlr.num_levels);
 }
 
-TEST(QueueReactiveSimulator, LegacyDefaultUnchangedWhenLobSeedTouched) {
-    // Touching lob_seed / hlr fields under the Legacy default must not
-    // perturb the run — those knobs are inert until lob_model flips.
+TEST(QueueReactiveSimulator, LobSeedAndHlrFieldsInertUnderLegacy) {
+    // When lob_model is explicitly set to Legacy, touching lob_seed /
+    // hlr fields must not perturb the run — those knobs route through
+    // the QueueReactive code path only. (After M9/6 the default flipped
+    // to QueueReactive, so this test now pins Legacy explicitly.)
     SimulationConfig a;
     a.seed       = 1337;
     a.iterations = 0;
     a.quiet      = true;
-    // a.lob_model defaults to Legacy.
+    a.lob_model  = LobModel::Legacy;
 
     SimulationConfig b = a;
     b.lob_seed   = 0xFEEDFACEu;
-    b.hlr.theta_per_ns = 99.0;  // would explode under QueueReactive — irrelevant under Legacy.
+    b.hlr.theta_per_ns = 99.0;  // would explode under QueueReactive — inert under Legacy.
 
     auto fingerprint = [](SimulationConfig cfg) {
         MarketSimulator sim(cfg);
