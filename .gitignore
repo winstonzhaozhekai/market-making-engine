@@ -39,3 +39,8 @@ coverage/
 
 # Ignore generated files
 *.generated.*
+
+# M11: real ITCH tapes are multi-GB — downloaded, never committed.
+# (The small backtest report CSVs + flamegraph SVG under bench_results/
+# ARE committed.)
+data/itch/
