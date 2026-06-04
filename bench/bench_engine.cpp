@@ -28,13 +28,14 @@ template <class StrategyT, class LoggerT>
 }
 
 template <class StrategyT, class LoggerT>
-static void run_bench(int events, uint32_t seed,
+static void run_bench(int events, uint32_t seed, LobModel lob_model,
                       const std::string& strategy_name,
                       StrategyT& strategy, LoggerT& logger) {
     SimulationConfig config;
     config.seed = seed;
     config.iterations = events;
     config.quiet = true;
+    config.lob_model = lob_model;
 
     MarketSimulator simulator(config);
     RiskConfig risk_cfg;
@@ -45,7 +46,11 @@ static void run_bench(int events, uint32_t seed,
 
     std::cout << "Strategy: " << strategy_name
               << ", events: " << events
-              << ", seed: " << seed << "\n";
+              << ", seed: " << seed
+              << ", lob_model: "
+              << (lob_model == LobModel::QueueReactive ? "queue_reactive"
+                                                      : "legacy")
+              << "\n";
 
     auto wall_start = std::chrono::steady_clock::now();
     int processed = 0;
@@ -80,6 +85,7 @@ int main(int argc, char* argv[]) {
     int events = 10000;
     uint32_t seed = 42;
     std::string strategy_name = "heuristic";
+    LobModel lob_model = LobModel::Legacy;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -89,9 +95,22 @@ int main(int argc, char* argv[]) {
             seed = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else if (arg == "--strategy" && i + 1 < argc) {
             strategy_name = argv[++i];
+        } else if (arg == "--lob-model" && i + 1 < argc) {
+            std::string v = argv[++i];
+            if (v == "legacy") {
+                lob_model = LobModel::Legacy;
+            } else if (v == "queue_reactive" || v == "queue-reactive" ||
+                       v == "qr") {
+                lob_model = LobModel::QueueReactive;
+            } else {
+                std::cerr << "Unknown --lob-model: " << v
+                          << " (expected legacy|queue_reactive)\n";
+                return 1;
+            }
         } else if (arg == "--help") {
             std::cout << "Usage: bench_engine [--events N] [--seed N] "
-                         "[--strategy heuristic|avellaneda-stoikov]\n";
+                         "[--strategy heuristic|avellaneda-stoikov] "
+                         "[--lob-model legacy|queue_reactive]\n";
             return 0;
         } else {
             std::cerr << "Unknown argument: " << arg << "\n";
@@ -102,10 +121,10 @@ int main(int argc, char* argv[]) {
     NullLogger logger;
     if (strategy_name == "heuristic") {
         HeuristicStrategy strategy;
-        run_bench(events, seed, strategy_name, strategy, logger);
+        run_bench(events, seed, lob_model, strategy_name, strategy, logger);
     } else if (strategy_name == "avellaneda-stoikov" || strategy_name == "as") {
         AvellanedaStoikovStrategy strategy;
-        run_bench(events, seed, "avellaneda-stoikov", strategy, logger);
+        run_bench(events, seed, lob_model, "avellaneda-stoikov", strategy, logger);
     } else {
         std::cerr << "Unknown strategy: " << strategy_name << "\n";
         return 1;

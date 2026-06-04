@@ -73,6 +73,9 @@ target_link_libraries(bench_engine PRIVATE mme_core mme_warnings)
 add_executable(bench_latency_sweep bench/bench_latency_sweep.cpp)
 target_link_libraries(bench_latency_sweep PRIVATE mme_core mme_warnings)
 
+add_executable(bench_lob_realism bench/bench_lob_realism.cpp)
+target_link_libraries(bench_lob_realism PRIVATE mme_core mme_warnings)
+
 # ---- Tests -----------------------------------------------------------------
 
 enable_testing()
