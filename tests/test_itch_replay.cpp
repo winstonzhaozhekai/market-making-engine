@@ -5,11 +5,16 @@
 // asserts that the matching engine reflects the expected book state.
 
 #include "MarketSimulator.h"
+#include "include/BacktestMetrics.h"
+#include "include/HeuristicStrategy.h"
 #include "include/ItchParser.h"
+#include "include/Logger.h"
+#include "include/MarketMakerT.h"
 #include "include/SimulationConfig.h"
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -413,3 +418,76 @@ TEST(ItchReplayMm, FullItchExecuteWithMmPartialAbsorption) {
     EXPECT_EQ(ev.mm_fills[0].fill_qty, 30);
 }
 
+
+// ---- End-to-end smoke: tape → MarketSimulator → MarketMakerT → metrics
+
+TEST(ItchReplayEndToEnd, SyntheticTapeRunsToCompletionWithFiniteMetrics) {
+    TapeBuilder t;
+    t.stock_directory(kLocate, kSym, 100ULL);
+    // Seed both sides of the book so MM has a market to quote against.
+    std::uint64_t ref = 1;
+    std::uint64_t ts  = 200ULL;
+    for (int i = 0; i < 10; ++i) {
+        // Bids stacked at $99.99, $99.98, ...
+        t.add_order(kLocate, ts++, ref++, 'B', 100,
+                    kSym, 999900 - static_cast<std::uint32_t>(i) * 100);
+        // Asks stacked at $100.01, $100.02, ...
+        t.add_order(kLocate, ts++, ref++, 'S', 100,
+                    kSym, 1000100 + static_cast<std::uint32_t>(i) * 100);
+    }
+    // A few executions on the inside-most orders to generate trades.
+    t.executed(kLocate, ts++, /*ref=*/1, 50, /*match=*/1);   // hit best bid
+    t.executed(kLocate, ts++, /*ref=*/2, 25, /*match=*/2);   // hit best ask
+    t.executed(kLocate, ts++, /*ref=*/3, 40, /*match=*/3);
+    const auto path = t.write_to_tempfile("EndToEndSmoke");
+
+    SimulationConfig cfg     = make_cfg(path);
+    cfg.initial_price        = 100.0;
+
+    MarketSimulator simulator(cfg);
+    HeuristicStrategy strategy;
+    NullLogger        logger;
+    RiskConfig        risk_cfg;
+    mme::MarketMakerT<HeuristicStrategy, NullLogger> mm(
+        simulator.instrument_meta(), risk_cfg, &strategy, &logger);
+
+    mme::BacktestMetrics metrics;
+    std::int64_t clock_ns = 0;
+    int processed = 0;
+    bool exhausted = false;
+    try {
+        for (int i = 0; i < 1000; ++i) {
+            auto md = simulator.generate_event();
+            clock_ns += 1'000'000;
+            if (md.best_bid_price > 0 && md.best_ask_price > 0) {
+                const double mid =
+                    0.5 * (simulator.instrument_meta().to_price(md.best_bid_price) +
+                           simulator.instrument_meta().to_price(md.best_ask_price));
+                metrics.record_mid(clock_ns, mid);
+            }
+            const auto fills = md.mm_fills;
+            mm.on_market_data(md, simulator);
+            for (const auto& f : fills) {
+                metrics.record_fill(
+                    clock_ns, f.side,
+                    simulator.instrument_meta().to_price(f.price),
+                    f.fill_qty);
+            }
+            metrics.record_pnl(clock_ns, mm.get_total_pnl());
+            ++processed;
+        }
+    } catch (const std::out_of_range&) {
+        exhausted = true;
+    }
+
+    // We processed at least one event and the metrics traces are
+    // non-empty; PnL is finite; drawdown is finite + non-negative.
+    EXPECT_GT(processed, 0);
+    EXPECT_TRUE(exhausted) << "Tape should be exhausted before iter cap.";
+    EXPECT_FALSE(metrics.pnl_trace().empty());
+    EXPECT_FALSE(metrics.mid_trace().empty());
+    EXPECT_TRUE(std::isfinite(mm.get_total_pnl()));
+    EXPECT_TRUE(std::isfinite(metrics.max_drawdown()));
+    EXPECT_GE(metrics.max_drawdown(), 0.0);
+    EXPECT_TRUE(std::isfinite(metrics.sharpe_annualized()));
+}

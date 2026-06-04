@@ -76,6 +76,9 @@ target_link_libraries(bench_latency_sweep PRIVATE mme_core mme_warnings)
 add_executable(bench_lob_realism bench/bench_lob_realism.cpp)
 target_link_libraries(bench_lob_realism PRIVATE mme_core mme_warnings)
 
+add_executable(itch_replay bench/itch_replay.cpp)
+target_link_libraries(itch_replay PRIVATE mme_core mme_warnings)
+
 # ---- Tests -----------------------------------------------------------------
 
 enable_testing()
