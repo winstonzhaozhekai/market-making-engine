@@ -37,6 +37,8 @@ const char* mode_to_string(SimulationMode mode) {
             return "simulate";
         case SimulationMode::Replay:
             return "replay";
+        case SimulationMode::ItchReplay:
+            return "itch_replay";
     }
     return "unknown";
 }
@@ -48,7 +50,12 @@ SimulationMode parse_mode(const std::string& value) {
     if (value == "replay") {
         return SimulationMode::Replay;
     }
-    throw std::invalid_argument("Invalid --mode value: " + value + " (expected simulate|replay)");
+    if (value == "itch_replay") {
+        return SimulationMode::ItchReplay;
+    }
+    throw std::invalid_argument(
+        "Invalid --mode value: " + value +
+        " (expected simulate|replay|itch_replay)");
 }
 
 mme::LatencyDistribution parse_latency_dist(const std::string& value) {

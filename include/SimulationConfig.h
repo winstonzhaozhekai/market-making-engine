@@ -9,7 +9,16 @@
 
 enum class SimulationMode {
     Simulate,
-    Replay
+    Replay,
+    // M10: drive the matching engine off a Nasdaq TotalView-ITCH 5.0 binary
+    // tape. The tape is the source of synthetic resting orders; MM injects
+    // via the same `MarketSimulator::submit_order` path the other modes use,
+    // and the matching engine's price-time-priority FIFO arbitrates queue
+    // position between MM and ITCH-resting orders. Requires
+    // `itch_log_path` + `itch_symbol`; latency is required to be zero for
+    // v1 (the M8 fixed 1 µs production-step does not align with ITCH's
+    // non-uniform timestamp deltas; latency overlay is deferred).
+    ItchReplay
 };
 
 // M9: which order-book simulation model is active.
@@ -65,6 +74,14 @@ struct SimulationConfig {
     std::uint32_t seed = 42;
     std::string event_log_path;
     std::string replay_log_path;
+
+    // M10 ITCH replay: path to a Nasdaq TotalView-ITCH 5.0 binary tape
+    // (length-prefixed message stream) plus the 8-char ASCII symbol to
+    // filter on (e.g. "AAPL    "). Ignored unless `mode ==
+    // SimulationMode::ItchReplay`.
+    std::string    itch_log_path;
+    std::string    itch_symbol;
+
     SimulationMode mode = SimulationMode::Simulate;
     bool quiet = false;
 

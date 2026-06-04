@@ -8,6 +8,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "MarketDataEvent.h"
 #include "MatchingEngine.h"
@@ -111,6 +112,35 @@ private:
     };
     std::optional<QueueReactiveState> qr_;
 
+    // ---- M10 ITCH replay state -----------------------------------------
+    // Engaged only when `config.mode == SimulationMode::ItchReplay`. The
+    // tape is loaded fully into memory on construction (small test tapes
+    // are ~kB; a full Nasdaq trading day is multi-GB and would warrant an
+    // mmap swap in a follow-on commit). `cursor` walks the buffer
+    // length-prefix at a time via mme::itch::next_frame.
+    //
+    // `stock_locate_filter` is learned from the first R (Stock Directory)
+    // message whose `stock` field matches `config.itch_symbol`. All
+    // messages with a different stock_locate are fast-skipped.
+    //
+    // Engine ids for ITCH-resting orders use `kItchOrderTag | itch_ref`.
+    // `ref_price` maps ITCH ref → (side, ticks) so an E (Execute) message
+    // can submit a price-correct IOC injection at the resting price.
+    struct ItchRefInfo {
+        Side  side;
+        Ticks price;
+    };
+    struct ItchReplayState {
+        std::vector<std::uint8_t>                      tape;
+        std::size_t                                    cursor = 0;
+        std::uint16_t                                  stock_locate_filter = 0;
+        bool                                           filter_resolved = false;
+        std::array<char, 8>                            symbol{};
+        std::int64_t                                   last_timestamp_ns = 0;
+        std::unordered_map<std::uint64_t, ItchRefInfo> ref_price;
+    };
+    std::optional<ItchReplayState> itch_;
+
     // Produces a fresh raw MD event at current simulation time. Used by
     // both the zero-latency fast path (returned directly) and the M8 path
     // (enqueued in feed_queue; mm_fills stripped + deferred via match_queue).
@@ -126,6 +156,17 @@ private:
     void init_queue_reactive();
     void step_queue_reactive(std::vector<Trade>&     trades,
                              std::vector<FillEvent>& mm_fills);
+
+    // ---- M10 ITCH replay helpers ---------------------------------------
+    void init_itch_replay();
+    // Advances the cursor to the next matching-symbol book-affecting
+    // message, applies it to the matching engine, and populates `trades`
+    // / `mm_fills` with the consequences. Throws std::out_of_range when
+    // the tape is exhausted (mirrors the SimulationMode::Replay
+    // contract).
+    void step_itch_replay(std::vector<Trade>&     trades,
+                          std::vector<FillEvent>& mm_fills);
+    Ticks itch_price_to_ticks(std::uint32_t price_x10000) const;
     Ticks bid_level_ticks(int level) const;
     Ticks ask_level_ticks(int level) const;
     int   bid_level_of_price(Ticks px) const;
